@@ -1,0 +1,44 @@
+{
+  "dataset": "mmea-tsn",
+  "modality": ["RGB"],
+  "model_name": "cmr_mfn",
+  
+  "backbone": "tsn",
+  "arch": "ViT",
+  "fusion_type": "attention",
+  
+  "train_list": "mydataset_total_train.txt",
+  "test_list": "mydataset_test.txt",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+  
+  "num_segments": 8,
+  "batch_size": 8,
+  "workers": 4,
+  "dropout": 0.5,
+  
+  "lr": 0.001,
+  "lr_steps": [10, 20],
+  "momentum": 0.9,
+  "weight_decay": 0.0005,
+  "epochs": 1, 
+  "clip_gradient": 20,
+  
+  "memory_size": 0,
+  "increment": 8,
+  "shuffle": false,
+  
+  "partialbn": false,
+  "freeze": true,
+  
+  "mode": "eval",
+  "enable_ood": true,
+  "ood_methods": ["MSP", "ODIN", "Energy"],
+  "weights_path": "weights/mmea-tbn_tbn_ewc_bs16_mem0_ep1_inc8_oodfalse_modetrain/Aug30_08-51-01",
+
+  "seed": 1993,
+  "device": [0],
+  "prefix": "mmea-owcl",
+  "log_test_acc": false,
+  "use_wandb": true,
+  "debug_mode": false
+}

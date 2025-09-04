@@ -1,0 +1,1 @@
+python main.py -d mmea-tbn -m tbn_lwf

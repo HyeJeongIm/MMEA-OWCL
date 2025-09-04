@@ -1,0 +1,22 @@
+# datasets 전체 무시
+datasets/*
+
+# 특정 폴더/파일은 추적
+!datasets/keep_this_folder/
+!datasets/important_file.txt
+
+# 여러 폴더 무시
+weights/
+wandb/
+pretrain/
+logs/
+results/
+scripts/
+ood_results_icarl_replay_20250902_083608/
+
+# 특정 파일 무시
+nohup.out
+
+# Python 캐시 파일 무시
+*.pyc
+__pycache__/

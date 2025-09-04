@@ -1,0 +1,45 @@
+{
+  "dataset": "mmea-tbn",
+  "modality": ["RGB", "Gyro", "Acce"],
+  "model_name": "tbn_upperbound",
+  
+  "backbone": "tbn",
+  "arch": "BNInception",
+  "fusion_type": "concat",
+  "consensus_type": "avg",
+  "before_softmax": true,
+  
+  "train_list": "mydataset_total_train.txt",
+  "test_list": "mydataset_test.txt",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+  
+  "num_segments": 8,
+  "batch_size": 8,
+  "workers": 4,
+  "dropout": 0.5,
+  
+  "lr": 0.001,
+  "lr_steps": [10, 20],
+  "momentum": 0.9,
+  "weight_decay": 0.0005,
+  "epochs": 50, 
+  "clip_gradient": 20,
+  
+  "memory_size": 0,
+  "increment": 32,
+  "init_cls": 32,
+  "shuffle": false,
+  
+  "partialbn": true,
+  "freeze": false,
+
+  "mode": "upperbound",
+  "enable_ood": false,
+
+  "seed": 1993,
+  "device": [0],
+  "prefix": "mmea-owcl",
+  "log_test_acc": false,
+  "use_wandb": true,
+  "debug_mode": false
+}  
