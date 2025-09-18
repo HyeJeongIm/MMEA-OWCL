@@ -2,8 +2,7 @@
 Multi-Modal Open World Continual Learning (MMOWCL)
 
 Usage:
-    python main.py -d mmea -m ewc_tbn_concat
-    python main.py -d mmea -m ewc_tbn_concat --debug_mode
+    python main.py -d mmea -m tbn_ewc
 """
 
 import argparse
@@ -57,8 +56,14 @@ def main():
 
     # ------------- 6) W&B 초기화 (스윕 값이 최종 덮어씀) -------------
     if config.get('use_wandb'):
+        # mode에 따라 다른 wandb project 사용
+        if config.get('mode') == 'eval':
+            wandb_project = 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
+        else:
+            wandb_project = config.get('wandb_project', 'MMEA-OWCL')
+        
         wandb.init(
-            project=config['wandb_project'],
+            project=wandb_project,
             entity=config['wandb_entity'],
             name=f"{config['model_name']}_{config['run_id']}",
             config=config
@@ -67,9 +72,16 @@ def main():
         config.update(dict(wandb.config))
 
     # ------------- 7) init_cls 보정 및 검증 -------------
-    if config.get('init_cls') is None:
+    # init_cls가 없거나 increment와 다르면 increment로 맞춤 (wandb 업데이트 후에도 적용)
+    if config.get('init_cls') is None or config['init_cls'] != config['increment']:
+        if config.get('init_cls') is not None:
+            print(f"⚠️  init_cls ({config['init_cls']}) != increment ({config['increment']})")
+            print(f"   → init_cls를 increment 값으로 자동 보정: {config['increment']}")
         config['init_cls'] = config['increment']
-    assert config['init_cls'] == config['increment'], "init_cls and increment need to be same"
+        
+        # wandb가 활성화된 경우 wandb config도 업데이트
+        if config.get('use_wandb', False) and 'wandb' in globals():
+            wandb.config.update({'init_cls': config['increment']}, allow_val_change=True)
 
     # ------------- 8) 실험 요약 출력 -------------
     print("=" * 60)

@@ -84,19 +84,19 @@ class LTSGyroOnlyDetector(BaseOODDetector):
         # Ensure all tensors are on the same device
         device = logits.device
         
-        # Check if Gyro modality is available (need at least 2 modalities: RGB + Gyro)
-        if len(individual_features) < 2:
-            logging.warning("❌ [LTS_Gyro_Only] Gyro modality not available! This model only has RGB modality.")
-            logging.warning("    ❌ Returning None - this method is not applicable to single modality models.")
+        # Check if individual features are available
+        if len(individual_features) == 0:
+            logging.warning("❌ [LTS_Gyro_Only] No individual features provided!")
+            logging.warning("    ❌ Returning None - cannot compute Gyro-only LTS without features.")
             return None
         
-        # Extract Gyro features (index 1)
-        gyro_features = individual_features[1].to(device)
+        # Extract Gyro features (mmeabase.py ensures only Gyro features are passed)
+        gyro_features = individual_features[0].to(device)  # First (and only) feature is Gyro
         
         # 입력 데이터 정보 로깅
         logging.info(f"  📥 Input logits shape: {logits.shape}")
         logging.info(f"  📥 Gyro features shape: {gyro_features.shape}")
-        logging.info(f"  🎯 Using Gyro modality only (index 1 out of {len(individual_features)} modalities)")
+        logging.info(f"  🎯 Using Gyro modality only (received {len(individual_features)} feature tensor)")
         
         # Step 1: Apply L2 normalization to Gyro features for consistency
         gyro_features_normalized = F.normalize(gyro_features, p=2, dim=1)

@@ -5,6 +5,11 @@ datasets/*
 !datasets/keep_this_folder/
 !datasets/important_file.txt
 
+
+# 특정 폴더/파일은 추적
+!weights/keep_this_folder/
+!weights/important_file.txt
+
 # 여러 폴더 무시
 weights/
 wandb/

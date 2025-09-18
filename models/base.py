@@ -378,16 +378,22 @@ class BaseLearner(object):
             "tasks": self._cur_task,
             "model_state_dict": self._network.state_dict(),
         }
+        
+        # iCaRL: Save class means for NME evaluation
+        if hasattr(self, '_class_means'):
+            save_dict['class_means'] = self._class_means
+            logging.info(f"💾 Saved class means for {len(self._class_means)} classes")
+            
         torch.save(save_dict, "{}/{}_{}.pkl".format(weights_dir, filename, self._cur_task))
 
     def _choose_optimizer(self):
         if len(self._modality) > 1:
-            param_groups = [
-                {'params': filter(lambda p: p.requires_grad, self._network.backbone.rgb.parameters())},
-                #{'params': filter(lambda p: p.requires_grad, self._network.backbone.flow.parameters()), 'lr': 0.001},
-                #{'params': filter(lambda p: p.requires_grad, self._network.fusion.parameters())},
-                #{'params': filter(lambda p: p.requires_grad, self._network.fc.parameters())},
-            ]
+            # 🔧 수정: RGB가 없어도 작동하도록 빈 리스트로 시작
+            param_groups = []
+            
+            # RGB가 있을 때만 추가
+            if 'RGB' in self._modality and hasattr(self._network.backbone, 'rgb'):
+                param_groups.append({'params': filter(lambda p: p.requires_grad, self._network.backbone.rgb.parameters())})
         else:
             param_groups = filter(lambda p: p.requires_grad, self._network.parameters())
 
