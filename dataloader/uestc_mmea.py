@@ -3,15 +3,7 @@ from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
 from .mydataset import MyDataSet
 from utils.transforms import ArrayToTensor, DataStack, GroupNormalize, IdentityTransform, ImgStack, ToTorchFormatTensor, GroupScale, GroupCenterCrop
-import torch.utils.data as data
-
-
-COMMON_CLASS_ORDER = [
-    26, 14, 23, 4, 11, 25, 31, 10,
-    29, 5, 6, 9, 17, 22, 2, 19,
-    13, 1, 21, 16, 8, 3, 27, 28,
-    15, 30, 0, 7, 12, 18, 20, 24
-]
+from dataloader.data_class_order import UESTC_MMEA_CLASS_ORDER
 
 
 class iData(object):
@@ -23,7 +15,7 @@ class iData(object):
 
 class iUESTC_MMEA_TBN(iData):
     use_path = False
-    class_order = COMMON_CLASS_ORDER
+    class_order = UESTC_MMEA_CLASS_ORDER
 
     def __init__(self, model, modality, arch, train_list, test_list):
         self.modality = modality
@@ -99,7 +91,7 @@ class iUESTC_MMEA_TBN(iData):
 
 class iUESTC_MMEA_TSN(iData):
     use_path = False
-    class_order = COMMON_CLASS_ORDER
+    class_order = UESTC_MMEA_CLASS_ORDER
 
     def __init__(self, model, modality, arch, train_list, test_list):
         self.modality = modality

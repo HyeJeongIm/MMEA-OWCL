@@ -5,7 +5,9 @@ from PIL import Image
 from scipy import signal
 from scipy.integrate import trapz
 from torch.utils.data import Dataset
-from dataloader.data import iUESTC_MMEA_TBN, iUESTC_MMEA_TSN
+from dataloader.uestc_mmea import iUESTC_MMEA_TBN, iUESTC_MMEA_TSN
+from dataloader.dataego import iDataEgo_TBN, iDataEgo_TSN
+
 import os
 import os.path
 import pandas as pd
@@ -726,7 +728,11 @@ def _get_idata(dataset_name, model, modality, arch, train_list, test_list):
     name = dataset_name.lower()
     if name == "mmea-tbn":
         return iUESTC_MMEA_TBN(model, modality, arch, train_list, test_list)
+    elif name == "dataego-tbn":
+        return iDataEgo_TBN(model, modality, arch, train_list, test_list)
     elif name == "mmea-tsn":
         return iUESTC_MMEA_TSN(model, modality, arch, train_list, test_list)
+    elif name == "dataego-tsn":
+        return iDataEgo_TSN(model, modality, arch, train_list, test_list)
     else:
         raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
