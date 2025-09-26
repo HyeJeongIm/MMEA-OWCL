@@ -126,9 +126,9 @@ def _train(args, experiment_dir, weights_dir, log_dir):
             image_tmpl[m] = args["flow_prefix"] + "{}_{:06d}.jpg"
     
     # 데이터 매니저 초기화
-    if args["dataset"] == "mmea-tbn":
+    if "tbn" in args["model_name"]:
         data_manager = TBNDataManager(model, image_tmpl, args)
-    elif args["dataset"] == "mmea-tsn":
+    elif "tsn" in args["model_name"]:
         data_manager = TSNDataManager(model, image_tmpl, args)
     else:
         raise NotImplementedError(f"알 수 없는 데이터셋: {args['dataset']}")
