@@ -5,8 +5,7 @@ from PIL import Image
 from scipy import signal
 from scipy.integrate import trapz
 from torch.utils.data import Dataset
-from dataloader.uestc_mmea import iUESTC_MMEA_TBN, iUESTC_MMEA_TSN
-from dataloader.dataego import iDataEgo_TBN, iDataEgo_TSN
+from dataloader.data import iUESTC_MMEA_TBN, iUESTC_MMEA_TSN, iDataEgo_TBN, iDataEgo_TSN
 
 import os
 import os.path
@@ -25,7 +24,7 @@ class TBNDataManager(object):
 
         self.dataset_name = args['dataset']
         self._setup_data(model._network, args['modality'], args['arch'], args['train_list'], args['test_list'],
-                         args['dataset'], args['shuffle'], args['seed'])
+                         args['dataset'], args['model_name'], args['shuffle'], args['seed'])
         assert args['init_cls'] <= len(self._class_order), "No enough classes."
         self._increments = [args['init_cls']]
         while sum(self._increments) + args['increment'] < len(self._class_order):
@@ -90,8 +89,8 @@ class TBNDataManager(object):
                                 trsf, self.new_length, self.image_tmpl,
                                 self.mpu_path, self.num_segments, mode)
 
-    def _setup_data(self, model, modality, arch, train_list, test_list, dataset_name, shuffle, seed):
-        idata = _get_idata(dataset_name, model, modality, arch, train_list, test_list)
+    def _setup_data(self, model, modality, arch, train_list, test_list, dataset_name, model_name, shuffle, seed):
+        idata = _get_idata(dataset_name, model_name, model, modality, arch, train_list, test_list)
         idata.download_data()
 
         # Data
@@ -724,15 +723,32 @@ def _map_new_class_index(y, order):
     return np.array(list(map(lambda x: order.index(x), y)))
 
 
-def _get_idata(dataset_name, model, modality, arch, train_list, test_list):
-    name = dataset_name.lower()
-    if name == "mmea-tbn":
-        return iUESTC_MMEA_TBN(model, modality, arch, train_list, test_list)
-    elif name == "dataego-tbn":
-        return iDataEgo_TBN(model, modality, arch, train_list, test_list)
-    elif name == "mmea-tsn":
-        return iUESTC_MMEA_TSN(model, modality, arch, train_list, test_list)
-    elif name == "dataego-tsn":
-        return iDataEgo_TSN(model, modality, arch, train_list, test_list)
-    else:
-        raise NotImplementedError("Unknown dataset {}.".format(dataset_name))
+def _get_idata(dataset_name, model_name, model, modality, arch, train_list, test_list):
+    dataset_name = dataset_name.lower()
+    model_name = model_name.lower()
+
+    # Map dataset names to their corresponding classes
+    dataset_map = {
+        'mmea': {
+            'tbn': iUESTC_MMEA_TBN,
+            'tsn': iUESTC_MMEA_TSN
+        },
+        'dataego': {
+            'tbn': iDataEgo_TBN, 
+            'tsn': iDataEgo_TSN
+        }
+    }
+
+    # Get model type (tbn or tsn)
+    model_type = 'tbn' if 'tbn' in model_name else 'tsn' if 'tsn' in model_name else None
+    if not model_type:
+        raise NotImplementedError(f"Unknown model type for {model.name}")
+
+    # Get dataset type (mmea or dataego) 
+    dataset_type = next((k for k in dataset_map if k in dataset_name), None)
+    if not dataset_type:
+        raise NotImplementedError(f"Unknown dataset {dataset_name}")
+
+    # Get and instantiate appropriate class
+    idata_class = dataset_map[dataset_type][model_type]
+    return idata_class(model, modality, arch, train_list, test_list)
