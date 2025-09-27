@@ -33,7 +33,7 @@ def main():
     args, _ = parser.parse_known_args()
 
     # ------------- 2) 설정 JSON 로드 (exps/exp_<model>.json) -------------
-    config_path = os.path.join("exps", f"exp_{args.model_name}.json")
+    config_path = os.path.join("exps", f"exp_{args.dataset}_{args.model_name}.json")
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path, 'r', encoding='utf-8') as f:

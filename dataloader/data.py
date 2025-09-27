@@ -3,7 +3,7 @@ from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
 from .mydataset import MyDataSet
 from utils.transforms import ArrayToTensor, DataStack, GroupNormalize, IdentityTransform, ImgStack, ToTorchFormatTensor, GroupScale, GroupCenterCrop
-from dataloader.data_class_order import UESTC_MMEA_CLASS_ORDER
+from dataloader.data_class_order import UESTC_MMEA_CLASS_ORDER, DATAEGO_CLASS_ORDER
 
 
 class iData(object):
@@ -13,9 +13,9 @@ class iData(object):
     class_order = None
 
 
-class iUESTC_MMEA_TBN(iData):
+class iData_TBN(iData):
     use_path = False
-    class_order = UESTC_MMEA_CLASS_ORDER
+    class_order = None
 
     def __init__(self, model, modality, arch, train_list, test_list):
         self.modality = modality
@@ -87,11 +87,11 @@ class iUESTC_MMEA_TBN(iData):
             targets.append(dataset.video_list[i].label)
 
         return targets
+    
 
-
-class iUESTC_MMEA_TSN(iData):
+class iData_TSN(iData):
     use_path = False
-    class_order = UESTC_MMEA_CLASS_ORDER
+    class_order = None
 
     def __init__(self, model, modality, arch, train_list, test_list):
         self.modality = modality
@@ -157,3 +157,28 @@ class iUESTC_MMEA_TSN(iData):
             targets.append(dataset.video_list[i].label)
 
         return targets
+
+
+# UESTC-MMEA
+class iUESTC_MMEA_TBN(iData_TBN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = UESTC_MMEA_CLASS_ORDER
+
+
+class iUESTC_MMEA_TSN(iData_TSN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = UESTC_MMEA_CLASS_ORDER
+
+# DataEgo
+class iDataEgo_TBN(iData_TBN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = DATAEGO_CLASS_ORDER
+
+
+class iDataEgo_TSN(iData_TSN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = DATAEGO_CLASS_ORDER
