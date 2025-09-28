@@ -1,7 +1,7 @@
 {
     "dataset": "dataego",
     "modality": ["RGB", "Gyro", "Acce"],
-    "model_name": "tbn_replay",
+    "model_name": "tbn_icarl",
     
     "backbone": "tbn",
     "arch": "BNInception",

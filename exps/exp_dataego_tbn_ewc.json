@@ -1,7 +1,7 @@
 {
     "dataset": "dataego",
     "modality": ["RGB", "Gyro", "Acce"],
-    "model_name": "tbn_replay",
+    "model_name": "tbn_ewc",
     
     "backbone": "tbn",
     "arch": "BNInception",
@@ -25,7 +25,7 @@
     "epochs": 50, 
     "clip_gradient": 20,
     
-    "memory_size": 320,
+    "memory_size": 0,
     "increment": 10,
     "shuffle": false,
     
