@@ -238,7 +238,7 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
         
         try:
             # Evaluation 모드로 OOD 평가 실행
-            if args.get("enable_ood", False):
+            if args.get("enable_ood", False) and task_id != data_manager.nb_tasks - 1:
                 cl_results, ood_results, score_distributions = model.inference_mode_evaluation(
                     data_manager, checkpoint_path, task_id
                 )
@@ -249,6 +249,7 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
                 all_ood_results[task_key] = ood_results
             else:
                 logging.warning("enable_ood=False in eval mode. Only CL evaluation will be performed.")
+                model.enable_ood = False if model.enable_ood == True else model.enable_ood
                 cl_results = model.inference_mode_evaluation(
                     data_manager, checkpoint_path, task_id
                 )
