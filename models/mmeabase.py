@@ -228,6 +228,7 @@ class MMEABaseLearner(BaseLearner):
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
         
         # Standard CL accuracy evaluation
+        cl_metrics = {}
         cnn_accy, nme_accy = self.eval_task()
         
         if nme_accy is not None:
@@ -237,24 +238,23 @@ class MMEABaseLearner(BaseLearner):
             
         # Log task metrics to W&B (모든 CL 메트릭을 한 번에 로깅)
         if self.args.get('use_wandb', False):
-            cl_metrics = {"Task/avg_acc": cnn_accy['top1']}
+            cl_metrics.update({"Task/avg_acc": cnn_accy['top1']})
             
             # CL grouped accuracy 추가
             for k, v in cnn_accy['grouped'].items():
-                cl_metrics[f"Task/[{k}]_acc"] = v
+                cl_metrics.update({f"Task/[{k}]_acc": v})
 
             # NME accuracy 추가 (있는 경우)
             if nme_accy is not None:
-                cl_metrics["Task/nme_avg_acc"] = nme_accy['top1']
+                cl_metrics.update({"Task/nme_avg_acc": nme_accy['top1']})
                 for k, v in nme_accy.get('grouped', {}).items():
-                    cl_metrics[f"Task/NME_[{k}]_acc"] = v
+                    cl_metrics.update({f"Task/NME_[{k}]_acc": v})
             
             # 🎯 모든 CL 메트릭을 한 번에 로깅 (동일한 step)
             logging.info("📊 Logging all CL metrics to wandb in a single step...")
-            wandb.log(cl_metrics)
             logging.info(f"✅ Logged {len(cl_metrics)} CL metrics to wandb")
         
-        return {'cnn': cnn_accy, 'nme': nme_accy if nme_accy else {'top1': 0.0, 'grouped': {}}}
+        return {'cnn': cnn_accy, 'nme': nme_accy if nme_accy else {'top1': 0.0, 'grouped': {}}}, cl_metrics
 
     def evaluate_ood(self):
         """Evaluate only OOD detection performance"""
@@ -280,7 +280,7 @@ class MMEABaseLearner(BaseLearner):
         
         ood_results = {}
         score_distributions = {}
-        all_wandb_metrics = {}  # 모든 OOD 메트릭을 저장할 딕셔너리
+        ood_methods_metrics = {}  # 모든 OOD 메트릭을 저장할 딕셔너리
         
         logging.info("=== OOD Detection Results ===")
                 
@@ -548,7 +548,7 @@ class MMEABaseLearner(BaseLearner):
                     
                     # 🔄 모든 OOD 메트릭을 하나의 딕셔너리에 수집 (개별 wandb.log 호출 대신)
                     if self.args.get('use_wandb', False):
-                        method_metrics = {
+                        ood_methods_metrics.update({
                             # Core metrics
                             f"Task/{method_name}_auroc": metrics['auroc'],
                             f"Task/{method_name}_aupr_id": metrics['aupr_id'],
@@ -578,20 +578,13 @@ class MMEABaseLearner(BaseLearner):
                             f"Task/{method_name}_youden_fpr": cm_youden['fpr'],
                             f"Task/{method_name}_youden_threshold": cm_youden['threshold'],
                             f"Task/{method_name}_youdenJ": cm_youden['youdenJ']
-                        }
-                        all_wandb_metrics.update(method_metrics)
+                        })
                 else:
                     logging.error(f"{method_name}: Error - {metrics['error']}")
                     
             except Exception as e:
                 logging.error(f"{method_name} evaluation failed: {e}")
                 ood_results[method_name] = {'error': str(e), 'method': method_name}
-        
-        # 🎯 모든 OOD 방법론의 결과를 한 번에 wandb에 로깅 (동일한 step)
-        if self.args.get('use_wandb', False) and all_wandb_metrics:
-            logging.info("📊 Logging all OOD metrics to wandb in a single step...")
-            wandb.log(all_wandb_metrics)
-            logging.info(f"✅ Logged {len(all_wandb_metrics)} OOD metrics to wandb")
         
         # Store results and data for visualization
         self.latest_ood_results = ood_results
@@ -602,7 +595,7 @@ class MMEABaseLearner(BaseLearner):
             'score_distributions': score_distributions
         }
         
-        return ood_results, score_distributions
+        return ood_results, score_distributions, ood_methods_metrics
     
     def load_checkpoint(self, checkpoint_path):
         """Load model from checkpoint for inference"""
@@ -674,12 +667,14 @@ class MMEABaseLearner(BaseLearner):
         # Perform evaluation
         if self.enable_ood:
             # Perform both CL and OOD evaluation
-            cl_results = self.evaluate_cl()
-            ood_results, score_distributions = self.evaluate_ood()
+            cl_results, cl_metrics = self.evaluate_cl()
+            ood_results, score_distributions, ood_metrics = self.evaluate_ood()
+            self.auto_wandb_log(cl_metrics, ood_metrics, self._cur_task + 1)
             return cl_results, ood_results, score_distributions
         else:
             # Perform only CL evaluation
-            cl_results = self.evaluate_cl()
+            cl_results, cl_metrics = self.evaluate_cl()
+            self.auto_wandb_log(cl_metrics, {}, self._cur_task + 1)
             return cl_results
     
     def _update_classifier(self, nb_classes):
@@ -867,3 +862,14 @@ class MMEABaseLearner(BaseLearner):
         result = self._extract_data_batch(loader, extract_features=True, extract_logits=False)
         return result.get('features'), result.get('labels')
   
+    def auto_wandb_log(self, cl_metrics, ood_metrics, task_id):
+        if self.args["use_wandb"]:
+            all_metrics = {}
+            all_metrics.update(cl_metrics)
+            all_metrics.update(ood_metrics)
+            all_metrics.update({"Task/Task_ID": task_id})
+            
+            # 🎯 모든 CL + OOD 메트릭을 한 번에 로깅 (동일한 step)
+            logging.info("📊 Logging all CL + OOD metrics to wandb in a single step...")
+            wandb.log(all_metrics)
+            logging.info(f"✅ Logged {len(cl_metrics)} CL + {len(ood_metrics)} OOD metrics to wandb")
