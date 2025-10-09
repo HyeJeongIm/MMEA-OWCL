@@ -93,8 +93,88 @@ class MMEABaseLearner(BaseLearner):
         logging.info(f"  📚 Train samples: {len(train_dataset)}")
         logging.info(f"  🧪 ID test samples: {len(test_dataset)}")
     
+    def _compute_total_loss(self, outputs, targets):
+        """
+        Main Loss와 Auxiliary Loss를 유연하게 결합하여 총 손실 계산
+        
+        Args:
+            outputs: 네트워크 forward 결과 딕셔너리
+            targets: 정답 레이블
+            
+        Returns:
+            dict: {
+                'total_loss': 최종 손실,
+                'main_loss': 주 손실,
+                'auxiliary_loss': 보조 손실 (있는 경우),
+                'aux_weight': 보조 손실 가중치,
+                'has_auxiliary': 보조 손실 사용 여부
+            }
+        """
+        # 1. Main Loss 계산 (항상 존재)
+        main_loss = F.cross_entropy(outputs["logits"], targets)
+        
+        # 2. Auxiliary Loss 확인 및 결합 (있을 때만)
+        has_auxiliary = 'auxiliary_loss' in outputs and outputs['auxiliary_loss'] is not None
+        
+        if has_auxiliary:
+            auxiliary_loss = outputs['auxiliary_loss']
+            aux_weight = outputs.get('aux_loss_weight', 0.5)
+            
+            # 총 손실 = 주 손실 + (가중치 * 보조 손실)
+            total_loss = main_loss + aux_weight * auxiliary_loss
+            
+            return {
+                'total_loss': total_loss,
+                'main_loss': main_loss,
+                'auxiliary_loss': auxiliary_loss,
+                'aux_weight': aux_weight,
+                'has_auxiliary': True
+            }
+        else:
+            # Auxiliary Loss가 없으면 Main Loss만 사용
+            return {
+                'total_loss': main_loss,
+                'main_loss': main_loss,
+                'auxiliary_loss': torch.tensor(0.0, device=main_loss.device),
+                'aux_weight': 0.0,
+                'has_auxiliary': False
+            }
+    
+    def _update_fusion_task(self):
+        """Update fusion model for new task (if supported)"""
+        # Check if fusion model supports task updates (e.g., auxiliary_head_v2)
+        fusion_module = None
+        if hasattr(self._network, 'fusion') and hasattr(self._network.fusion, 'update_task'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network') and hasattr(self._network.fusion_network, 'update_task'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module:
+            # 🔥 Warm-up 상태 디버깅
+            if hasattr(fusion_module, 'warmup_epochs') and hasattr(fusion_module, 'current_epoch'):
+                logging.info(f"🔥 Fusion Warm-up Status BEFORE update_task:")
+                logging.info(f"   Task: {self._cur_task}, Current Epoch: {fusion_module.current_epoch}")
+                logging.info(f"   Warm-up Epochs: {fusion_module.warmup_epochs}")
+                logging.info(f"   Is Warm-up Phase: {fusion_module._is_warmup_phase() if hasattr(fusion_module, '_is_warmup_phase') else 'N/A'}")
+            
+            fusion_module.update_task(self._cur_task)
+            logging.info(f"🎯 Updated fusion model for Task {self._cur_task}")
+            
+            # 🔥 Warm-up 상태 디버깅 (업데이트 후)
+            if hasattr(fusion_module, 'warmup_epochs') and hasattr(fusion_module, 'current_epoch'):
+                logging.info(f"🔥 Fusion Warm-up Status AFTER update_task:")
+                logging.info(f"   Task: {self._cur_task}, Current Epoch: {fusion_module.current_epoch}")
+                logging.info(f"   Is Warm-up Phase: {fusion_module._is_warmup_phase() if hasattr(fusion_module, '_is_warmup_phase') else 'N/A'}")
+        else:
+            logging.info(f"⚠️  No fusion module with update_task method found for Task {self._cur_task}")
+    
+    
     def _train(self, train_loader, test_loader):
         self._network.to(self._device)
+        
+        # Update fusion model for new task (if supported)
+        self._update_fusion_task()
+        
         optimizer = self._choose_optimizer()
 
         # Setup scheduler
@@ -117,6 +197,16 @@ class MMEABaseLearner(BaseLearner):
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
+            
+            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
+            fusion_module = None
+            if hasattr(self._network, 'fusion'):
+                fusion_module = self._network.fusion
+            elif hasattr(self._network, 'fusion_network'):
+                fusion_module = self._network.fusion_network
+            
+            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+                fusion_module.set_epoch(epoch)
                 
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
@@ -132,9 +222,48 @@ class MMEABaseLearner(BaseLearner):
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-
-                loss = F.cross_entropy(logits, targets)
+                
+                # 🎯 Forward pass with auxiliary loss support
+                outputs = self._network(inputs, targets=targets)
+                logits = outputs["logits"]
+                
+                # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
+                loss_info = self._compute_total_loss(outputs, targets)
+                loss = loss_info['total_loss']
+                
+                # 🎯 디버깅 정보 출력 (auxiliary loss 사용 시)
+                if loss_info['has_auxiliary'] and i == 0:  # 첫 번째 배치에서만
+                    main_loss_val = loss_info['main_loss'].item()
+                    aux_loss_val = loss_info['auxiliary_loss'].item()
+                    aux_weight = loss_info['aux_weight']
+                    weighted_aux_loss = aux_weight * aux_loss_val
+                    total_loss_val = loss_info['total_loss'].item()
+                    
+                    # 🔥 Fusion 모듈의 warm-up 상태 확인
+                    fusion_module = None
+                    if hasattr(self._network, 'fusion'):
+                        fusion_module = self._network.fusion
+                    elif hasattr(self._network, 'fusion_network'):
+                        fusion_module = self._network.fusion_network
+                    
+                    warmup_info = ""
+                    if fusion_module and hasattr(fusion_module, '_is_warmup_phase'):
+                        is_warmup = fusion_module._is_warmup_phase()
+                        current_epoch = getattr(fusion_module, 'current_epoch', 'N/A')
+                        warmup_epochs = getattr(fusion_module, 'warmup_epochs', 'N/A')
+                        warmup_info = f" | Warm-up: {is_warmup} (Epoch {current_epoch}/{warmup_epochs})"
+                    
+                    logging.info(f"📊 Multi-task Learning (Task {self._cur_task}, Epoch {epoch}){warmup_info}:")
+                    logging.info(f"   🎯 Loss Scale Analysis:")
+                    logging.info(f"      Main Loss: {main_loss_val:.4f}")
+                    logging.info(f"      Aux Loss (raw): {aux_loss_val:.4f}")
+                    logging.info(f"      Aux Weight (λ): {aux_weight}")
+                    logging.info(f"      Aux Loss (weighted): {weighted_aux_loss:.4f}")
+                    logging.info(f"      Total Loss: {total_loss_val:.4f}")
+                    logging.info(f"   📈 Contribution Ratio:")
+                    logging.info(f"      Main: {main_loss_val/total_loss_val*100:.1f}% ({main_loss_val:.4f}/{total_loss_val:.4f})")
+                    logging.info(f"      Aux: {weighted_aux_loss/total_loss_val*100:.1f}% ({weighted_aux_loss:.4f}/{total_loss_val:.4f})")
+                    logging.info(f"   🔍 Loss Ratio: Main/Aux = {main_loss_val/aux_loss_val:.2f}:1")
 
                 # zero gradients
                 for opt in optimizers:

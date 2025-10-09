@@ -23,9 +23,13 @@ def train(args):
     pb_flag = "1" if args.get('partialbn', False) else "0"
     fr_flag = "1" if args.get('freeze', False) else "0"
     
+    # fusion_type 정보 추가 (기본값: concat)
+    fusion_type = args.get('fusion_type', 'concat')
+    
     experiment_name_parts = [
         args['dataset'].replace('-', '_'),  # mmea-tbn -> mmea_tbn
         args['model_name'],
+        fusion_type,  # fusion_type 추가
         modality_str,
         f"ep{args['epochs']}",
         f"bs{args['batch_size']}",

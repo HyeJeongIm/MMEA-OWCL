@@ -1,11 +1,11 @@
 {
   "dataset": "mmea-tbn",
-  "modality": ["RGB"],
+  "modality": ["RGB", "Gyro", "Acce"],
   "model_name": "tbn_replay",
   
   "backbone": "tbn",
   "arch": "BNInception",
-  "fusion_type": "concat",
+  "fusion_type": "auxiliary_head_v2_4",
   "consensus_type": "avg",
   "before_softmax": true,
   
@@ -26,7 +26,7 @@
   "clip_gradient": 20,
   
   "memory_size": 320,
-  "increment": 8,
+  "increment": 4,
   "shuffle": false,
   
   "partialbn": true,
@@ -34,11 +34,11 @@
   
   "mode": "eval",
   "enable_ood": true,
-  "ood_methods": ["MSP", "ODIN", "Energy", "LTS_Individual", "LTS_Fusion", "LTS_RGB_Only", "LTS_Gyro_Only", "LTS_Acce_Only", "LTS_Late_Fusion"],
-  "weights_path": "/workspace/MMEA-OWCL/weights/mmea_tbn_tbn_replay_rgb_ep50_bs8_pb1_fr0_inc8_mem320_train/Aug30_23-03-26",
+  "ood_methods": ["Energy"],
+  "weights_path": "/workspace/MMEA-OWCL/weights/mmea_tbn_tbn_replay_auxiliary_head_v2_4_rgbgyroacce_ep50_bs8_pb1_fr0_inc4_mem320_train/Oct04_17-13-25",
 
   "seed": 1993,
-  "device": [0],
+  "device": [1],
   "prefix": "mmea-owcl",
   "log_test_acc": false,
   "use_wandb": false,

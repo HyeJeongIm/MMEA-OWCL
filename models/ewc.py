@@ -94,6 +94,16 @@ class EWC(MMEABaseLearner):
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
+            
+            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
+            fusion_module = None
+            if hasattr(self._network, 'fusion'):
+                fusion_module = self._network.fusion
+            elif hasattr(self._network, 'fusion_network'):
+                fusion_module = self._network.fusion_network
+            
+            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+                fusion_module.set_epoch(epoch)
 
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
@@ -111,14 +121,27 @@ class EWC(MMEABaseLearner):
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-
-                # Classification loss + EWC regularization
-                loss_clf = F.cross_entropy(
-                    logits[:, self._known_classes:], targets - self._known_classes
-                )
+                
+                # 🎯 Forward pass with auxiliary loss support
+                outputs = self._network(inputs, targets=targets)
+                logits = outputs["logits"]
+                
+                # 🎯 Classification loss 계산 (EWC는 새 클래스만 대상)
+                clf_targets = targets - self._known_classes
+                clf_logits = outputs["logits"][:, self._known_classes:]
+                
+                # 🎯 Main loss를 clf_logits와 clf_targets로 재정의하여 auxiliary loss와 결합
+                outputs_for_aux = {
+                    'logits': clf_logits,
+                    'auxiliary_loss': outputs.get('auxiliary_loss'),
+                    'aux_loss_weight': outputs.get('aux_loss_weight')
+                }
+                loss_info = self._compute_total_loss(outputs_for_aux, clf_targets)
+                loss_clf_with_aux = loss_info['total_loss']
+                
+                # 🎯 EWC regularization 추가
                 loss_ewc = self.compute_ewc()
-                loss = loss_clf + lamda * loss_ewc
+                loss = loss_clf_with_aux + lamda * loss_ewc
 
                 # zero gradients
                 for opt in optimizers:

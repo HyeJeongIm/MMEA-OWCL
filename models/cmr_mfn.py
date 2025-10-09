@@ -94,6 +94,16 @@ class CMR_MFN(MMEABaseLearner):
         
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
+            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
+            fusion_module = None
+            if hasattr(self._network, 'fusion'):
+                fusion_module = self._network.fusion
+            elif hasattr(self._network, 'fusion_network'):
+                fusion_module = self._network.fusion_network
+            
+            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+                fusion_module.set_epoch(epoch)
+            
             self._prepare_training()
             losses = 0.0
             correct, total = 0, 0
@@ -161,6 +171,16 @@ class CMR_MFN(MMEABaseLearner):
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
+            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
+            fusion_module = None
+            if hasattr(self._network, 'fusion'):
+                fusion_module = self._network.fusion
+            elif hasattr(self._network, 'fusion_network'):
+                fusion_module = self._network.fusion_network
+            
+            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+                fusion_module.set_epoch(epoch)
+            
             self._prepare_training()
             losses = 0.0
             correct, total = 0, 0

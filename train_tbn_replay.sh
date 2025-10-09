@@ -1,1 +1,1 @@
-python main.py -d mmea-tbn -m tbn_replay
+python main.py -d mmea-tbn -m tbn_replay -f auxiliary_head_v2_4

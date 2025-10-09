@@ -204,30 +204,26 @@ class Replay(MMEABaseLearner):
             self._class_means[class_idx, :] = mean
 
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
-        """기존 Replay처럼 단순 CrossEntropy만"""
+        """Enhanced Replay with Auxiliary Head Training"""
         optimizers = optimizer if isinstance(optimizer, (list, tuple)) else [optimizer]
         schedulers = scheduler if isinstance(scheduler, (list, tuple)) else [scheduler]
+        
+        # Check if using adaptive fusion
+        use_adaptive_fusion = hasattr(self._network.fusion, 'compute_synergy_metrics')
+        aux_loss_weight = self.args.get("aux_loss_weight", 0.3)  # auxiliary loss 가중치
 
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
-            
-            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
-            fusion_module = None
-            if hasattr(self._network, 'fusion'):
-                fusion_module = self._network.fusion
-            elif hasattr(self._network, 'fusion_network'):
-                fusion_module = self._network.fusion_network
-            
-            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
-                fusion_module.set_epoch(epoch)
 
             if self._partialbn:
                 self._network.backbone.freeze_fn("partialbn_statistics")
             if self._freeze:
                 self._network.backbone.freeze_fn("bn_statistics")
 
-            losses, correct, total = 0.0, 0, 0
+            losses, aux_losses, correct, total = 0.0, 0.0, 0, 0
+            synergy_stats = {}
+            
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
@@ -236,23 +232,45 @@ class Replay(MMEABaseLearner):
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
 
-                # 🎯 Forward pass with auxiliary loss support
-                outputs = self._network(inputs, targets=targets)
-                logits = outputs["logits"]
-                
-                # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
-                loss_info = self._compute_total_loss(outputs, targets)
-                loss = loss_info['total_loss']
+                # Forward pass with auxiliary head support
+                if use_adaptive_fusion:
+                    outputs = self._network(inputs, targets=targets, return_aux=True)
+                    logits = outputs["logits"]
+                    main_loss = F.cross_entropy(logits, targets)
+                    
+                    # Auxiliary head losses
+                    aux_loss = 0.0
+                    if 'aux_logits' in outputs and outputs['aux_logits']:
+                        for mod, aux_logit in outputs['aux_logits'].items():
+                            aux_loss += F.cross_entropy(aux_logit, targets)
+                        aux_loss /= len(outputs['aux_logits'])  # 평균
+                    
+                    # Total loss = main loss + weighted auxiliary loss
+                    total_loss = main_loss + aux_loss_weight * aux_loss
+                    
+                    # Synergy information 수집
+                    if 'synergy_info' in outputs:
+                        for key, value in outputs['synergy_info'].items():
+                            if key not in synergy_stats:
+                                synergy_stats[key] = []
+                            synergy_stats[key].append(value)
+                else:
+                    # 기존 방식
+                    outputs = self._network(inputs)
+                    logits = outputs["logits"]
+                    total_loss = F.cross_entropy(logits, targets)
+                    aux_loss = torch.tensor(0.0)
 
                 for opt in optimizers:
                     opt.zero_grad(set_to_none=True)
-                loss.backward()
+                total_loss.backward()
                 if self._clip_gradient is not None:
                     nn.utils.clip_grad_norm_(self._network.parameters(), self._clip_gradient)
                 for opt in optimizers:
                     opt.step()
 
-                losses += loss.item()
+                losses += total_loss.item()
+                aux_losses += aux_loss.item() if isinstance(aux_loss, torch.Tensor) else aux_loss
                 preds = torch.argmax(logits, dim=1)
                 correct += preds.eq(targets).sum().item()
                 total += targets.numel()
@@ -261,15 +279,37 @@ class Replay(MMEABaseLearner):
                 sch.step()
 
             train_acc = round((correct * 100.0) / max(1, total), 2)
+            
+            # Synergy statistics 계산
+            avg_synergy_stats = {}
+            for key, values in synergy_stats.items():
+                if values:  # 빈 리스트가 아닌 경우만
+                    avg_synergy_stats[f"avg_{key}"] = np.mean(values)
 
             # wandb 로깅
+            log_dict = {
+                "Train/train_loss": losses / len(train_loader),
+                "Train/train_accuracy": train_acc,
+            }
+            
+            if use_adaptive_fusion:
+                log_dict["Train/aux_loss"] = aux_losses / len(train_loader)
+                log_dict.update({f"Train/{k}": v for k, v in avg_synergy_stats.items()})
+            
             if self.args["use_wandb"]:
-                wandb.log({
-                    "Train/train_loss": losses / len(train_loader),
-                    "Train/train_accuracy": train_acc,
-                })
+                wandb.log(log_dict)
 
             info = f"Task {self._cur_task}, Epoch {epoch+1}/{self._epochs} => Loss {losses/len(train_loader):.3f}, Train_accy {train_acc:.2f}"
+            
+            if use_adaptive_fusion:
+                info += f", Aux_loss {aux_losses/len(train_loader):.3f}"
+                
+                # 주요 시너지 정보 표시
+                if 'avg_Gyro_synergy_score' in avg_synergy_stats:
+                    info += f", Gyro_synergy {avg_synergy_stats['avg_Gyro_synergy_score']:.3f}"
+                if 'avg_Acce_synergy_score' in avg_synergy_stats:
+                    info += f", Acce_synergy {avg_synergy_stats['avg_Acce_synergy_score']:.3f}"
+            
             if self.args.get("log_test_acc", False) and epoch % 5 == 0:
                 test_acc = self._compute_accuracy(self._network, test_loader)
                 info += f", Test_accy {test_acc:.2f}"
@@ -279,6 +319,16 @@ class Replay(MMEABaseLearner):
             prog_bar.set_description(info)
 
         logging.info(info)
+        
+        # 에포크 종료 후 시너지 요약 정보 로깅
+        if use_adaptive_fusion and hasattr(self._network.fusion, 'get_synergy_summary'):
+            synergy_summary = self._network.fusion.get_synergy_summary()
+            if synergy_summary:
+                logging.info("=== Modality Synergy Summary ===")
+                for mod, trend in synergy_summary.items():
+                    if 'trend' in mod:
+                        logging.info(f"  {mod}: {trend}")
+                logging.info("=" * 35)
 
 
 class TBN_Replay(Replay):

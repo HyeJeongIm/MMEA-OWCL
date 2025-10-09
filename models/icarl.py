@@ -77,6 +77,16 @@ class iCaRL(MMEABaseLearner):
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             
+            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
+            fusion_module = None
+            if hasattr(self._network, 'fusion'):
+                fusion_module = self._network.fusion
+            elif hasattr(self._network, 'fusion_network'):
+                fusion_module = self._network.fusion_network
+            
+            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+                fusion_module.set_epoch(epoch)
+            
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
             if self._freeze:
@@ -91,16 +101,24 @@ class iCaRL(MMEABaseLearner):
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-
-                loss_clf = F.cross_entropy(logits, targets)
+                
+                # 🎯 Forward pass with auxiliary loss support
+                outputs = self._network(inputs, targets=targets)
+                logits = outputs["logits"]
+                
+                # 🎯 Classification loss + auxiliary loss 결합
+                loss_info = self._compute_total_loss(outputs, targets)
+                loss_clf_with_aux = loss_info['total_loss']
+                
+                # 🎯 Knowledge Distillation loss 계산
                 loss_kd = _KD_loss(
-                    logits[:, : self._known_classes],
+                    outputs["logits"][:, : self._known_classes],
                     self._old_network(inputs)["logits"],
                     T,
                 )
-
-                loss = loss_clf + loss_kd
+                
+                # 🎯 최종 손실 = (Classification + Auxiliary) + Knowledge Distillation
+                loss = loss_clf_with_aux + loss_kd
 
                 # zero gradients
                 for opt in optimizers:

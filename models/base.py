@@ -267,7 +267,9 @@ class BaseLearner(object):
                 idx_dataset, batch_size=batch_size, shuffle=False, num_workers=4
             )
             vectors, _ = self._extract_vectors(idx_loader)
+            # 안정적인 거리 계산을 위해 특징 벡터를 L2 정규화
             vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
+            # 이 클래스의 '중심점(평균)'을 계산. 이것이 우리가 근사하려는 목표
             mean = np.mean(vectors, axis=0)
             mean = mean / np.linalg.norm(mean)
 

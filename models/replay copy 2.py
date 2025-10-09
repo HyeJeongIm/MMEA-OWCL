@@ -211,16 +211,6 @@ class Replay(MMEABaseLearner):
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
-            
-            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
-            fusion_module = None
-            if hasattr(self._network, 'fusion'):
-                fusion_module = self._network.fusion
-            elif hasattr(self._network, 'fusion_network'):
-                fusion_module = self._network.fusion_network
-            
-            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
-                fusion_module.set_epoch(epoch)
 
             if self._partialbn:
                 self._network.backbone.freeze_fn("partialbn_statistics")
@@ -236,13 +226,8 @@ class Replay(MMEABaseLearner):
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
 
-                # 🎯 Forward pass with auxiliary loss support
-                outputs = self._network(inputs, targets=targets)
-                logits = outputs["logits"]
-                
-                # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
-                loss_info = self._compute_total_loss(outputs, targets)
-                loss = loss_info['total_loss']
+                logits = self._network(inputs)["logits"]
+                loss = F.cross_entropy(logits, targets)
 
                 for opt in optimizers:
                     opt.zero_grad(set_to_none=True)

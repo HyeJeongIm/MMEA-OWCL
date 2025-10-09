@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import copy
+import logging
 
 from models.backbones import get_backbone
 from models.fusion import get_fusion
@@ -35,7 +36,12 @@ class TBNBaseline(nn.Module):
             midfusion=self.fusion_type,
             feature_dim=self.backbone.feature_dim, # 각 모달리티마다 1024
             modality=self.modality,
-            dropout=self.dropout
+            dropout=self.dropout,
+            num_segments=self.num_segments,
+            shared_dim=args.get("shared_dim", 256),  # JSON에서 설정 가능
+            num_classes=args.get("init_cls", 8),  # 초기 클래스 수
+            consensus_type=self.consensus_type,  # TBN consensus 방법
+            before_softmax=self.before_softmax   # TBN softmax 옵션
         )
 
         # Set final feature dimension based on modality count
@@ -51,6 +57,11 @@ class TBNBaseline(nn.Module):
         print(f"   Backbone feature_dim: {self.backbone.feature_dim}")
         print(f"   After fusion feature_dim: {self.feature_dim}")
         self.fc = None  # Classifier will be created via update_fc()
+
+        # Pass num_segments to fusion if it supports TBN (auxiliary_head, auxiliary_head_v2 등)
+        if hasattr(self.fusion, 'num_segments'):
+            self.fusion.num_segments = self.num_segments
+            print(f"🔧 Set fusion.num_segments = {self.num_segments}")
 
         print("=" * 40)
         print("✅ Baseline Model Configuration")
@@ -74,12 +85,18 @@ class TBNBaseline(nn.Module):
         fused = self.fusion(features)  # Fuse multi-modal features
         return fused["features"]
 
-    def forward(self, x):
+    def forward(self, x, targets=None):
         """Forward pass: backbone -> fusion -> classifier"""
         features = self.backbone(x)  # Extract features from each modality
-        fused = self.fusion(features)  # Combine features across modalities
+        fused = self.fusion(features, targets=targets)  # Combine features across modalities (with targets for auxiliary loss)
         out = self.fc(fused["features"])  # Apply classifier
         out.update(fused)  # Include fusion output
+        
+        # 🎯 Auxiliary loss를 최상위로 이동 (학습 루프에서 쉽게 접근 가능)
+        if 'auxiliary_loss' in fused:
+            out['auxiliary_loss'] = fused['auxiliary_loss']
+            out['aux_loss_weight'] = fused.get('aux_loss_weight', 0.0)
+        
         return out
 
     def update_fc(self, nb_classes):
@@ -101,6 +118,11 @@ class TBNBaseline(nn.Module):
             new_fc.fc_action.bias.data[:nb_output] = self.fc.fc_action.bias.data
 
         self.fc = new_fc
+        
+        # Update fusion auxiliary heads if available
+        if hasattr(self.fusion, 'update_auxiliary_heads'):
+            self.fusion.update_auxiliary_heads(nb_classes)
+            logging.info(f"🎯 Updated fusion auxiliary heads to {nb_classes} classes")
 
     def copy(self):
         """Create deep copy of the model"""

@@ -2,7 +2,9 @@
 Multi-Modal Open World Continual Learning (MMOWCL)
 
 Usage:
-    python main.py -d mmea -m tbn_ewc
+    python main.py -d mmea -m tbn_replay
+    python main.py -d mmea -m tbn_replay -f imu_cosine_gate
+    python main.py -d mmea -m tbn_replay -f concat
 """
 
 import argparse
@@ -26,7 +28,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--dataset', type=str, required=True, help='데이터셋 이름 (예: mmea)')
     parser.add_argument('-m', '--model_name', type=str, required=True, help='모델/실험 이름 (exps/exp_<name>.json)')
-    parser.add_argument('--wandb_project', type=str, default='MMEA-OWCL')
+    parser.add_argument('-f', '--fusion_type', type=str, 
+                        choices=['concat', 'imu_cosine_gate', 'imu_euclidean_gate', 'imu_kl_gate', 'imu_entropy_gate', 'hierarchical_gating', 'hierarchical_concat', 'auxiliary_head', 'auxiliary_head_v2', 'auxiliary_head_v2_3', 'auxiliary_head_v2_4', 'auxiliary_head_v2_5', 'gated_cross_modal', 'attention', 'cross_attention'],
+                        help='Fusion 방법 선택 (JSON 설정을 덮어씀)')
+    parser.add_argument('--wandb_project', type=str, default='MMEA-OWCL_hj_test')
     parser.add_argument('--wandb_entity', type=str, default='mmea-owcl')
     parser.add_argument('--debug_mode', action='store_true',
                         help='디버그 모드: 학습 스텝 축소 + W&B 비활성')
@@ -89,6 +94,7 @@ def main():
     print("=" * 60)
     print(f"✓ Dataset      : {config.get('dataset')}")
     print(f"✓ Model        : {config.get('model_name')}")
+    print(f"✓ Fusion Type  : {config.get('fusion_type')}")
     print(f"✓ Modalities   : {config.get('modality')}")
     print(f"✓ Tasks        : Initial {config.get('init_cls')} + {config.get('increment')} each increment")
     print(f"✓ OOD Methods  : {config.get('ood_methods')}")

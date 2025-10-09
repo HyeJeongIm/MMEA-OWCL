@@ -31,7 +31,7 @@
   "freeze": true,
   
   "mode": "eval",
-  "enable_ood": true,
+  "enable_ood": false,
   "ood_methods": ["MSP", "ODIN", "Energy"],
   "weights_path": "weights/mmea-tbn_tbn_ewc_bs16_mem0_ep1_inc8_oodfalse_modetrain/Aug30_08-51-01",
 
