@@ -87,6 +87,11 @@ class iCaRL(MMEABaseLearner):
             if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
                 fusion_module.set_epoch(epoch)
             
+            # 🎯 각 task/epoch의 특정 시점에서 modality weight 로깅
+            is_first_epoch = (epoch == 0)
+            is_frozen_epoch = (epoch == 5)  # pretrain 완료 직후
+            is_last_epoch = (epoch == self._epochs - 1)
+            
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
             if self._freeze:
@@ -94,9 +99,14 @@ class iCaRL(MMEABaseLearner):
                 
             losses = 0.0
             correct, total = 0, 0
+            total_batches = len(train_loader)
+            
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
+                
+                is_first_batch = (i == 0)
+                is_last_batch = (i == total_batches - 1)
                 
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
@@ -105,6 +115,11 @@ class iCaRL(MMEABaseLearner):
                 # 🎯 Forward pass with auxiliary loss support
                 outputs = self._network(inputs, targets=targets)
                 logits = outputs["logits"]
+                
+                # 🎯 모달리티 weight 로깅 (첫 epoch, frozen epoch, 마지막 epoch)
+                if (is_first_epoch and is_first_batch) or (is_frozen_epoch and is_first_batch) or (is_last_epoch and is_last_batch):
+                    phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
+                    self._log_modality_weights(outputs, epoch, i, phase)
                 
                 # 🎯 Classification loss + auxiliary loss 결합
                 loss_info = self._compute_total_loss(outputs, targets)

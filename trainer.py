@@ -27,7 +27,7 @@ def train(args):
     fusion_type = args.get('fusion_type', 'concat')
     
     experiment_name_parts = [
-        args['dataset'].replace('-', '_'),  # mmea-tbn -> mmea_tbn
+        args['dataset'],  # mmea-tbn -> mmea_tbn
         args['model_name'],
         fusion_type,  # fusion_type 추가
         modality_str,
@@ -189,13 +189,17 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # 증분 학습
         model.incremental_train(data_manager)
         
-        # CL 평가
-        cl_results = model.evaluate_cl()
+        # CL 평가 (tuple unpacking)
+        cl_results, cl_metrics = model.evaluate_cl()
         
         # OOD 평가 (enable_ood=True인 경우에만)
         if args.get("enable_ood", False):
-            ood_results, score_distributions = model.evaluate_ood()
-            # OOD 결과도 저장하고 싶다면 여기서 처리
+            ood_results, score_distributions, ood_metrics = model.evaluate_ood()
+            # Wandb 로깅 (CL + OOD)
+            model.auto_wandb_log(cl_metrics, ood_metrics, task_id + 1)
+        else:
+            # Wandb 로깅 (CL only)
+            model.auto_wandb_log(cl_metrics, {}, task_id + 1)
         
         # 결과 저장
         task_key = f"task_{task_id}"
@@ -493,7 +497,10 @@ def _run_upperbound_mode(args, model, data_manager, weights_dir, all_cl_results)
     
     # Evaluate upper-bound performance
     logging.info("📊 Evaluating Upper-bound Performance...")
-    cl_results = model.evaluate_cl()
+    cl_results, cl_metrics = model.evaluate_cl()
+    
+    # Wandb 로깅
+    model.auto_wandb_log(cl_metrics, {}, 0)
     
     # Store results
     all_cl_results["upperbound"] = cl_results

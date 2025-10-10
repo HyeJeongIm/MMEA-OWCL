@@ -113,32 +113,133 @@ class MMEABaseLearner(BaseLearner):
         # 1. Main Loss 계산 (항상 존재)
         main_loss = F.cross_entropy(outputs["logits"], targets)
         
-        # 2. Auxiliary Loss 확인 및 결합 (있을 때만)
-        has_auxiliary = 'auxiliary_loss' in outputs and outputs['auxiliary_loss'] is not None
+        # 2. Fusion 모듈이 자체 compute_total_loss() 메서드를 가지고 있는지 확인
+        fusion_module = None
+        if hasattr(self._network, 'fusion') and hasattr(self._network.fusion, 'compute_total_loss'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network') and hasattr(self._network.fusion_network, 'compute_total_loss'):
+            fusion_module = self._network.fusion_network
         
-        if has_auxiliary:
-            auxiliary_loss = outputs['auxiliary_loss']
-            aux_weight = outputs.get('aux_loss_weight', 0.5)
+        if fusion_module:
+            # Fusion 모듈의 compute_total_loss() 사용 (v2_6의 pretrain phase 체크 포함)
+            auxiliary_loss = outputs.get('auxiliary_loss', None)
+            total_loss = fusion_module.compute_total_loss(main_loss, auxiliary_loss)
             
-            # 총 손실 = 주 손실 + (가중치 * 보조 손실)
-            total_loss = main_loss + aux_weight * auxiliary_loss
+            # Auxiliary loss 사용 여부 확인 (total_loss가 main_loss보다 크면 사용 중)
+            has_auxiliary = auxiliary_loss is not None and total_loss > main_loss
+            aux_weight = outputs.get('aux_loss_weight', 0.0) if has_auxiliary else 0.0
             
             return {
                 'total_loss': total_loss,
                 'main_loss': main_loss,
-                'auxiliary_loss': auxiliary_loss,
+                'auxiliary_loss': auxiliary_loss if auxiliary_loss is not None else torch.tensor(0.0, device=main_loss.device),
                 'aux_weight': aux_weight,
-                'has_auxiliary': True
+                'has_auxiliary': has_auxiliary
             }
         else:
-            # Auxiliary Loss가 없으면 Main Loss만 사용
-            return {
-                'total_loss': main_loss,
-                'main_loss': main_loss,
-                'auxiliary_loss': torch.tensor(0.0, device=main_loss.device),
-                'aux_weight': 0.0,
-                'has_auxiliary': False
-            }
+            # Fusion 모듈이 없거나 compute_total_loss()가 없으면 기존 방식 사용
+            has_auxiliary = 'auxiliary_loss' in outputs and outputs['auxiliary_loss'] is not None
+            
+            if has_auxiliary:
+                auxiliary_loss = outputs['auxiliary_loss']
+                aux_weight = outputs.get('aux_loss_weight', 0.5)
+                
+                # Auxiliary loss가 실제로 0이 아닌 경우에만 결합
+                if isinstance(auxiliary_loss, torch.Tensor) and auxiliary_loss.item() > 0:
+                    total_loss = main_loss + aux_weight * auxiliary_loss
+                else:
+                    total_loss = main_loss
+                    has_auxiliary = False
+                
+                return {
+                    'total_loss': total_loss,
+                    'main_loss': main_loss,
+                    'auxiliary_loss': auxiliary_loss,
+                    'aux_weight': aux_weight if has_auxiliary else 0.0,
+                    'has_auxiliary': has_auxiliary
+                }
+            else:
+                # Auxiliary Loss가 없으면 Main Loss만 사용
+                return {
+                    'total_loss': main_loss,
+                    'main_loss': main_loss,
+                    'auxiliary_loss': torch.tensor(0.0, device=main_loss.device),
+                    'aux_weight': 0.0,
+                    'has_auxiliary': False
+                }
+    
+    def _log_modality_weights(self, outputs, epoch, batch_idx, phase):
+        """
+        모달리티 가중치 로깅
+        
+        Args:
+            outputs: 네트워크 forward 결과
+            epoch: 현재 epoch
+            batch_idx: 현재 batch 인덱스
+            phase: 로깅 시점 ("START", "FROZEN", "END")
+        """
+        if 'modality_weights' not in outputs or outputs['modality_weights'] is None:
+            return
+        
+        weights = outputs['modality_weights']  # [batch_size, num_modalities]
+        
+        # 배치 평균 계산
+        mean_weights = weights.mean(dim=0).cpu().numpy()  # [num_modalities]
+        
+        # Confidence scores도 함께 로깅 (있으면)
+        confidences_dict = outputs.get('confidences', {})
+        
+        # 시점에 따른 표시
+        if phase == "START":
+            log_prefix = "🚀 Task Start (Pretrain Begin)"
+            emoji = "🚀"
+        elif phase == "FROZEN":
+            log_prefix = "❄️ Frozen Epoch (Dynamic Fusion Begin)"
+            emoji = "❄️"
+        else:  # END
+            log_prefix = "🏁 Task End"
+            emoji = "🏁"
+        
+        # 로그 출력
+        logging.info(f"")
+        logging.info(f"{'='*70}")
+        logging.info(f"{log_prefix}: Modality Weights (Task {self._cur_task}, Epoch {epoch}, Batch {batch_idx})")
+        logging.info(f"{'='*70}")
+        
+        # Weight와 Confidence 함께 출력
+        for idx, modality in enumerate(self._modality):
+            weight_val = mean_weights[idx]
+            weight_info = f"   {modality}: Weight={weight_val:.4f} ({weight_val*100:.2f}%)"
+            
+            # Confidence score도 출력 (있으면)
+            if modality in confidences_dict:
+                conf_tensor = confidences_dict[modality]
+                conf_mean = conf_tensor.mean().item()
+                weight_info += f", Confidence={conf_mean:.4f}"
+            
+            logging.info(weight_info)
+        
+        logging.info(f"   Weight Sum: {mean_weights.sum():.4f}")
+        logging.info(f"{'='*70}")
+        
+        # wandb 로깅
+        if self.args.get('use_wandb', False):
+            wandb_log = {}
+            
+            # Weight 로깅
+            for idx, modality in enumerate(self._modality):
+                wandb_log[f"Weights/{phase}_{modality}_weight_task{self._cur_task}"] = mean_weights[idx]
+                
+                # Confidence 로깅 (있으면)
+                if modality in confidences_dict:
+                    conf_mean = confidences_dict[modality].mean().item()
+                    wandb_log[f"Weights/{phase}_{modality}_confidence_task{self._cur_task}"] = conf_mean
+            
+            wandb_log[f"Weights/{phase}_epoch"] = epoch
+            wandb_log[f"Weights/{phase}_task"] = self._cur_task
+            
+            wandb.log(wandb_log)
+            logging.info(f"✅ Logged modality weights & confidences to wandb ({phase})")
     
     def _update_fusion_task(self):
         """Update fusion model for new task (if supported)"""
@@ -207,6 +308,11 @@ class MMEABaseLearner(BaseLearner):
             
             if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
                 fusion_module.set_epoch(epoch)
+            
+            # 🎯 각 task/epoch의 특정 시점에서 modality weight 로깅
+            is_first_epoch = (epoch == 0)
+            is_frozen_epoch = (epoch == 5)  # pretrain 완료 직후
+            is_last_epoch = (epoch == self._epochs - 1)
                 
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
@@ -215,9 +321,14 @@ class MMEABaseLearner(BaseLearner):
 
             losses = 0.0
             correct, total = 0, 0
+            total_batches = len(train_loader)
+            
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
+                
+                is_first_batch = (i == 0)
+                is_last_batch = (i == total_batches - 1)
                 
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
@@ -226,6 +337,11 @@ class MMEABaseLearner(BaseLearner):
                 # 🎯 Forward pass with auxiliary loss support
                 outputs = self._network(inputs, targets=targets)
                 logits = outputs["logits"]
+                
+                # 🎯 모달리티 weight 로깅 (첫 epoch, frozen epoch, 마지막 epoch)
+                if (is_first_epoch and is_first_batch) or (is_frozen_epoch and is_first_batch) or (is_last_epoch and is_last_batch):
+                    phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
+                    self._log_modality_weights(outputs, epoch, i, phase)
                 
                 # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
                 loss_info = self._compute_total_loss(outputs, targets)
@@ -819,10 +935,10 @@ class MMEABaseLearner(BaseLearner):
             raise NotImplementedError(f"Network {type(self._network)} doesn't support classifier update")
         
         # Run evaluations
-        cl_results = self.evaluate_cl()
+        cl_results, cl_metrics = self.evaluate_cl()
         
         if self.enable_ood:
-            ood_results, score_distributions = self.evaluate_ood()
+            ood_results, score_distributions, ood_metrics = self.evaluate_ood()
             return cl_results, ood_results, score_distributions
         else:
             return cl_results, {}, {}
