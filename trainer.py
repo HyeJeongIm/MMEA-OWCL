@@ -186,11 +186,11 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         model.incremental_train(data_manager)
         
         # CL 평가
-        cl_results = model.evaluate_cl()
+        cl_results, cl_metrics = model.evaluate_cl()
         
         # OOD 평가 (enable_ood=True인 경우에만)
         if args.get("enable_ood", False):
-            ood_results, score_distributions = model.evaluate_ood()
+            ood_results, score_distributions, ood_metrics = model.evaluate_ood()
             # OOD 결과도 저장하고 싶다면 여기서 처리
         
         # 결과 저장
@@ -213,6 +213,10 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # 태스크 요약
         cl_acc = cl_results['cnn']['top1']
         print(f"Task {task_id + 1} 완료 - CL 정확도: {cl_acc:.1f}%")
+        if args["enable_ood"]:
+            model.auto_wandb_log(cl_metrics, ood_metrics, task_id + 1)
+        else:
+            model.auto_wandb_log(cl_metrics, {}, task_id + 1)
 
 
 def _run_eval_mode(args, model, data_manager, all_cl_results):
