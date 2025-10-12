@@ -204,11 +204,14 @@ class TBNDummyDataset(Dataset):
         file_path = os.path.join(self.mpu_path, category, filename + '.csv')
         try:
             mpu_datas = pd.read_csv(file_path, header=None)
-            true_mpu_datas = []
-            for i in range(len(mpu_datas)):
-                ori_data = mpu_datas.loc[i]
-                true_mpu_data = self._mpu_data_convert(ori_data)
-                true_mpu_datas.append(true_mpu_data)
+            if 'UESTC-MMEA-CL' in self.mpu_path:
+                true_mpu_datas = []
+                for i in range(len(mpu_datas)):
+                    ori_data = mpu_datas.loc[i]
+                    true_mpu_data = self._mpu_data_convert(ori_data)
+                    true_mpu_datas.append(true_mpu_data)
+            else:
+                true_mpu_datas = mpu_datas
 
             filter_datas = self._median_filter(np.array(true_mpu_datas), kernel_size=5)
             angles = self._trapz(filter_datas[3:6, :])
@@ -618,11 +621,14 @@ class TSNDummyDataset(Dataset):
         file_path = record.path.replace('/data/', '/mpu/') + '.csv'
         try:
             mpu_datas = pd.read_csv(file_path, header=None)
-            true_mpu_datas = []
-            for i in range(len(mpu_datas)):
-                raw_data = mpu_datas.loc[i]
-                true_mpu_data = self._mpu_data_convert(raw_data)
-                true_mpu_datas.append(true_mpu_data)
+            if 'UESTC-MMEA-CL' in self.mpu_path:
+                true_mpu_datas = []
+                for i in range(len(mpu_datas)):
+                    raw_data = mpu_datas.loc[i]
+                    true_mpu_data = self._mpu_data_convert(raw_data)
+                    true_mpu_datas.append(true_mpu_data)
+            else:
+                true_mpu_datas = mpu_datas
 
             filter_datas = self._median_filter(np.array(true_mpu_datas), kernel_size=5)
             acce_data = filter_datas[0:3, :].T
