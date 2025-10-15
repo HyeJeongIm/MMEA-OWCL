@@ -212,20 +212,8 @@ class Replay(MMEABaseLearner):
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             
-            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
-            fusion_module = None
-            if hasattr(self._network, 'fusion'):
-                fusion_module = self._network.fusion
-            elif hasattr(self._network, 'fusion_network'):
-                fusion_module = self._network.fusion_network
-            
-            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
-                fusion_module.set_epoch(epoch)
-            
-            # 🎯 각 task/epoch의 특정 시점에서 modality weight 로깅
-            is_first_epoch = (epoch == 0)
-            is_frozen_epoch = (epoch == 5)  # pretrain 완료 직후
-            is_last_epoch = (epoch == self._epochs - 1)
+            # 🎯 Epoch 설정 및 confidence 수집 (공통 메서드 사용)
+            self._setup_epoch_and_collect_confidence(epoch)
 
             if self._partialbn:
                 self._network.backbone.freeze_fn("partialbn_statistics")
@@ -233,14 +221,10 @@ class Replay(MMEABaseLearner):
                 self._network.backbone.freeze_fn("bn_statistics")
 
             losses, correct, total = 0.0, 0, 0
-            total_batches = len(train_loader)
             
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
-                
-                is_first_batch = (i == 0)
-                is_last_batch = (i == total_batches - 1)
 
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
@@ -249,11 +233,6 @@ class Replay(MMEABaseLearner):
                 # 🎯 Forward pass with auxiliary loss support
                 outputs = self._network(inputs, targets=targets)
                 logits = outputs["logits"]
-                
-                # 🎯 모달리티 weight 로깅 (첫 epoch, frozen epoch, 마지막 epoch)
-                if (is_first_epoch and is_first_batch) or (is_frozen_epoch and is_first_batch) or (is_last_epoch and is_last_batch):
-                    phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
-                    self._log_modality_weights(outputs, epoch, i, phase)
                 
                 # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
                 loss_info = self._compute_total_loss(outputs, targets)

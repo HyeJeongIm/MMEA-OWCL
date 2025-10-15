@@ -12,6 +12,12 @@ import wandb
 from models.base import BaseLearner
 from utils.toolkit import target2onehot, tensor2numpy
 from ood import MSPDetector, EnergyDetector, ODINDetector, LTSIndividualDetector, LTSFusionDetector, LTSRGBOnlyDetector, LTSLateFusionDetector, LTSRGBOnlyNoNormDetector, LTSGyroOnlyDetector, LTSAcceOnlyDetector
+from ood.methods.modality_agreement import ModalityAgreementDetector
+from ood.methods.modality_agreement_v2 import ModalityAgreementV2Detector
+from ood.methods.confidence_variance import ConfidenceVarianceDetector
+from ood.methods.confidence_variance_v2 import ConfidenceVarianceV2Detector
+from ood.methods.weighted_energy import WeightedEnergyDetector
+from ood.methods.modality_discrepancy import ModalityDiscrepancyDetector, ModalityDiscrepancyKLDetector
 from ood.metrics import compute_ood_metrics, compute_threshold_accuracy
 
 
@@ -168,78 +174,165 @@ class MMEABaseLearner(BaseLearner):
                     'has_auxiliary': False
                 }
     
-    def _log_modality_weights(self, outputs, epoch, batch_idx, phase):
+    def _collect_class_confidences(self, phase):
         """
-        모달리티 가중치 로깅
+        Class별 modality confidence를 수집하고 출력
         
         Args:
-            outputs: 네트워크 forward 결과
-            epoch: 현재 epoch
-            batch_idx: 현재 batch 인덱스
-            phase: 로깅 시점 ("START", "FROZEN", "END")
+            phase: 로깅 시점 ("START", "FROZEN", "END", "TEST")
+        
+        Train 시점 (START, FROZEN, END): train_loader 내의 모든 class
+        Test 시점 (TEST): test_loader 내의 모든 class (0 ~ total_classes-1)
         """
-        if 'modality_weights' not in outputs or outputs['modality_weights'] is None:
+        # Fusion 모듈이 auxiliary head를 가지고 있는지 확인
+        fusion_module = None
+        if hasattr(self._network, 'fusion'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module is None or not hasattr(fusion_module, 'auxiliary_heads'):
+            logging.info(f"⚠️  No auxiliary heads found - skipping class-wise confidence logging")
             return
         
-        weights = outputs['modality_weights']  # [batch_size, num_modalities]
+        # 시점에 따라 적절한 loader 선택
+        if phase == "TEST":
+            loader = self.test_loader
+            loader_desc = "test_loader"
+        else:
+            loader = self.train_loader
+            loader_desc = "train_loader"
         
-        # 배치 평균 계산
-        mean_weights = weights.mean(dim=0).cpu().numpy()  # [num_modalities]
+        # Class별로 confidence를 저장할 딕셔너리
+        class_confidences = {}  # {class_id: {modality: [confidences]}}
         
-        # Confidence scores도 함께 로깅 (있으면)
-        confidences_dict = outputs.get('confidences', {})
+        # 네트워크를 eval 모드로 전환 (학습 중이어도 inference만 수행)
+        was_training = self._network.training
+        self._network.eval()
         
-        # 시점에 따른 표시
-        if phase == "START":
-            log_prefix = "🚀 Task Start (Pretrain Begin)"
-            emoji = "🚀"
-        elif phase == "FROZEN":
-            log_prefix = "❄️ Frozen Epoch (Dynamic Fusion Begin)"
-            emoji = "❄️"
-        else:  # END
-            log_prefix = "🏁 Task End"
-            emoji = "🏁"
-        
-        # 로그 출력
         logging.info(f"")
-        logging.info(f"{'='*70}")
-        logging.info(f"{log_prefix}: Modality Weights (Task {self._cur_task}, Epoch {epoch}, Batch {batch_idx})")
-        logging.info(f"{'='*70}")
+        logging.info(f"{'='*80}")
+        logging.info(f"📊 Collecting Class-wise Modality Confidences ({phase})")
+        logging.info(f"   Task: {self._cur_task}, Epoch: {fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else 'N/A'}")
+        logging.info(f"   Data Source: {loader_desc}")
+        logging.info(f"{'='*80}")
         
-        # Weight와 Confidence 함께 출력
-        for idx, modality in enumerate(self._modality):
-            weight_val = mean_weights[idx]
-            weight_info = f"   {modality}: Weight={weight_val:.4f} ({weight_val*100:.2f}%)"
-            
-            # Confidence score도 출력 (있으면)
-            if modality in confidences_dict:
-                conf_tensor = confidences_dict[modality]
-                conf_mean = conf_tensor.mean().item()
-                weight_info += f", Confidence={conf_mean:.4f}"
-            
-            logging.info(weight_info)
-        
-        logging.info(f"   Weight Sum: {mean_weights.sum():.4f}")
-        logging.info(f"{'='*70}")
-        
-        # wandb 로깅
-        if self.args.get('use_wandb', False):
-            wandb_log = {}
-            
-            # Weight 로깅
-            for idx, modality in enumerate(self._modality):
-                wandb_log[f"Weights/{phase}_{modality}_weight_task{self._cur_task}"] = mean_weights[idx]
+        with torch.no_grad():
+            for _, inputs, targets in tqdm(loader, desc=f"Collecting confidences ({phase})", leave=False):
+                # 입력을 디바이스로 이동
+                for m in self._modality:
+                    inputs[m] = inputs[m].to(self._device)
+                targets = targets.to(self._device)
                 
-                # Confidence 로깅 (있으면)
-                if modality in confidences_dict:
-                    conf_mean = confidences_dict[modality].mean().item()
-                    wandb_log[f"Weights/{phase}_{modality}_confidence_task{self._cur_task}"] = conf_mean
+                # Forward pass
+                outputs = self._network(inputs)
+                
+                # Confidence 추출
+                if 'confidences' not in outputs or not outputs['confidences']:
+                    continue
+                
+                confidences_dict = outputs['confidences']
+                
+                # 각 샘플에 대해 class별로 confidence 저장 (필터링 없이 모든 class)
+                for i, target in enumerate(targets):
+                    class_id = target.item()
+                    
+                    if class_id not in class_confidences:
+                        class_confidences[class_id] = {mod: [] for mod in self._modality}
+                    
+                    # 각 모달리티의 confidence 저장
+                    for modality in self._modality:
+                        if modality in confidences_dict:
+                            conf_val = confidences_dict[modality][i].item()
+                            class_confidences[class_id][modality].append(conf_val)
+        
+        # 원래 모드로 복원
+        if was_training:
+            self._network.train()
+        
+        # Class별 통계 출력
+        if class_confidences:
+            collected_classes = sorted(class_confidences.keys())
+            num_classes = len(collected_classes)
+            class_range_str = f"{collected_classes[0]}~{collected_classes[-1]}" if num_classes > 1 else f"{collected_classes[0]}"
             
-            wandb_log[f"Weights/{phase}_epoch"] = epoch
-            wandb_log[f"Weights/{phase}_task"] = self._cur_task
+            logging.info(f"")
+            logging.info(f"📈 Class-wise Modality Confidence Statistics:")
+            logging.info(f"   Collected {num_classes} classes: {class_range_str}")
+            logging.info(f"{'='*80}")
             
-            wandb.log(wandb_log)
-            logging.info(f"✅ Logged modality weights & confidences to wandb ({phase})")
+            # Class별로 정렬해서 출력
+            for class_id in collected_classes:
+                logging.info(f"  Class {class_id}:")
+                
+                for modality in self._modality:
+                    if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
+                        confs = np.array(class_confidences[class_id][modality])
+                        mean_conf = confs.mean()
+                        std_conf = confs.std()
+                        min_conf = confs.min()
+                        max_conf = confs.max()
+                        count = len(confs)
+                        
+                        logging.info(f"    {modality}: mean={mean_conf:.4f}, std={std_conf:.4f}, "
+                                   f"min={min_conf:.4f}, max={max_conf:.4f}, count={count}")
+            
+            logging.info(f"{'='*80}")
+            
+            # wandb 로깅
+            if self.args.get('use_wandb', False):
+                wandb_log = {}
+                
+                for class_id in class_confidences.keys():
+                    for modality in self._modality:
+                        if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
+                            confs = np.array(class_confidences[class_id][modality])
+                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_mean"] = confs.mean()
+                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_std"] = confs.std()
+                
+                wandb_log[f"ClassConfidence/{phase}_task"] = self._cur_task
+                wandb_log[f"ClassConfidence/{phase}_epoch"] = fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else -1
+                
+                wandb.log(wandb_log)
+                logging.info(f"✅ Logged class-wise confidences to wandb ({phase})")
+        else:
+            logging.info(f"⚠️  No confidence data collected")
+    
+    def _setup_epoch_and_collect_confidence(self, epoch):
+        """
+        Epoch 설정 및 특정 시점에 class별 confidence 수집
+        
+        Args:
+            epoch: 현재 epoch
+            
+        Returns:
+            tuple: (is_first_epoch, is_frozen_epoch, is_last_epoch)
+        """
+        # 🔥 Fusion 모듈에 현재 epoch 정보 전달
+        fusion_module = None
+        if hasattr(self._network, 'fusion'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+            fusion_module.set_epoch(epoch)
+        
+        # 🎯 Epoch 시점 판단
+        pretrain_epochs = 5
+        if fusion_module and hasattr(fusion_module, 'pretrain_epochs'):
+            pretrain_epochs = fusion_module.pretrain_epochs
+        
+        is_first_epoch = (epoch == 0)
+        is_frozen_epoch = (epoch == pretrain_epochs)
+        is_last_epoch = (epoch == self._epochs - 1)
+        
+        # 🎯 특정 epoch 시작 시점에 class별 confidence 수집
+        if is_first_epoch or is_frozen_epoch or is_last_epoch:
+            phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
+            self._collect_class_confidences(phase)
+        
+        return is_first_epoch, is_frozen_epoch, is_last_epoch
     
     def _update_fusion_task(self):
         """Update fusion model for new task (if supported)"""
@@ -299,20 +392,8 @@ class MMEABaseLearner(BaseLearner):
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             
-            # 🔥 Fusion 모듈에 현재 epoch 정보 전달 (auxiliary_head_v2_4 warmup 지원)
-            fusion_module = None
-            if hasattr(self._network, 'fusion'):
-                fusion_module = self._network.fusion
-            elif hasattr(self._network, 'fusion_network'):
-                fusion_module = self._network.fusion_network
-            
-            if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
-                fusion_module.set_epoch(epoch)
-            
-            # 🎯 각 task/epoch의 특정 시점에서 modality weight 로깅
-            is_first_epoch = (epoch == 0)
-            is_frozen_epoch = (epoch == 5)  # pretrain 완료 직후
-            is_last_epoch = (epoch == self._epochs - 1)
+            # 🎯 Epoch 설정 및 confidence 수집 (공통 메서드 사용)
+            self._setup_epoch_and_collect_confidence(epoch)
                 
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
@@ -327,9 +408,6 @@ class MMEABaseLearner(BaseLearner):
                 if self.args["debug_mode"] and i >= 5:
                     break
                 
-                is_first_batch = (i == 0)
-                is_last_batch = (i == total_batches - 1)
-                
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
@@ -337,11 +415,6 @@ class MMEABaseLearner(BaseLearner):
                 # 🎯 Forward pass with auxiliary loss support
                 outputs = self._network(inputs, targets=targets)
                 logits = outputs["logits"]
-                
-                # 🎯 모달리티 weight 로깅 (첫 epoch, frozen epoch, 마지막 epoch)
-                if (is_first_epoch and is_first_batch) or (is_frozen_epoch and is_first_batch) or (is_last_epoch and is_last_batch):
-                    phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
-                    self._log_modality_weights(outputs, epoch, i, phase)
                 
                 # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
                 loss_info = self._compute_total_loss(outputs, targets)
@@ -472,6 +545,9 @@ class MMEABaseLearner(BaseLearner):
         logging.info(f"=== Task {self._cur_task} CL Evaluation ===")
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
         
+        # 🎯 Test 시점에 class별 confidence 수집
+        self._collect_class_confidences("TEST")
+        
         # Standard CL accuracy evaluation
         cl_metrics = {}
         cnn_accy, nme_accy = self.eval_task()
@@ -595,6 +671,20 @@ class MMEABaseLearner(BaseLearner):
                     detector = LTSGyroOnlyDetector(self._network, self._device)
                 elif method_name == "LTS_Acce_Only":
                     detector = LTSAcceOnlyDetector(self._network, self._device)
+                elif method_name == "Modality_Agreement":
+                    detector = ModalityAgreementDetector(self._network, self._device, use_weights=True)
+                elif method_name == "Modality_Agreement_V2":
+                    detector = ModalityAgreementV2Detector(self._network, self._device, mode='hybrid')
+                elif method_name == "Confidence_Variance":
+                    detector = ConfidenceVarianceDetector(self._network, self._device, alpha=0.5, use_mean_only=False)
+                elif method_name == "Confidence_Variance_V2":
+                    detector = ConfidenceVarianceV2Detector(self._network, self._device, mode='mean')
+                elif method_name == "Weighted_Energy":
+                    detector = WeightedEnergyDetector(self._network, self._device, temperature=1.0, fusion_mode='weighted_average')
+                elif method_name == "Modality_Discrepancy_JSD":
+                    detector = ModalityDiscrepancyDetector(self._network, self._device, use_negative=True, normalize=False)
+                elif method_name == "Modality_Discrepancy_KL":
+                    detector = ModalityDiscrepancyKLDetector(self._network, self._device, use_negative=True)
                 else:
                     logging.warning(f"Unknown OOD method: {method_name}")
                     continue
@@ -767,6 +857,23 @@ class MMEABaseLearner(BaseLearner):
                         continue
                     
                     logging.info(f"  ✅ LTS_Acce_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                elif method_name in ["Modality_Agreement", "Modality_Agreement_V2", "Confidence_Variance", "Confidence_Variance_V2", "Weighted_Energy", "Modality_Discrepancy_JSD", "Modality_Discrepancy_KL"]:
+                    # Special handling for auxiliary head fusion-based methods
+                    # These methods need full model outputs (auxiliary_logits, confidences, weights)
+                    logging.info(f"  📊 Extracting outputs for {method_name}...")
+                    
+                    id_outputs = self._collect_outputs(self.test_loader)
+                    ood_outputs = self._collect_outputs(self.ood_test_loader)
+                    
+                    if id_outputs is None or ood_outputs is None:
+                        logging.warning(f"  ⚠️  {method_name} requires auxiliary head fusion outputs but they are not available")
+                        continue
+                    
+                    # Compute scores using full outputs
+                    id_scores = detector.compute_scores_from_outputs(id_outputs)
+                    ood_scores = detector.compute_scores_from_outputs(ood_outputs)
+                    
+                    logging.info(f"  ✅ {method_name} scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
                 else:
                     # Regular methods using only logits
                     id_scores = detector.compute_scores_from_cached_logits(id_logits)      
@@ -951,6 +1058,87 @@ class MMEABaseLearner(BaseLearner):
             del self._cached_ood_data
         logging.info("🧹 Cleared cached feature data to free memory")
     
+    def _collect_outputs(self, loader):
+        """
+        모델의 전체 outputs를 수집 (auxiliary_logits, confidences, modality_weights 포함)
+        
+        Args:
+            loader: DataLoader
+            
+        Returns:
+            dict: 집계된 outputs {
+                'logits': tensor,
+                'auxiliary_logits': {modality: tensor},
+                'confidences': {modality: tensor},
+                'modality_weights': tensor
+            }
+            또는 None (auxiliary head fusion이 아닌 경우)
+        """
+        self._network.eval()
+        
+        all_logits = []
+        all_auxiliary_logits = {}
+        all_confidences = {}
+        all_modality_weights = []
+        
+        with torch.no_grad():
+            for _, inputs, targets in tqdm(loader, desc="Collecting outputs", leave=False):
+                if isinstance(inputs, dict):
+                    for m in inputs:
+                        inputs[m] = inputs[m].to(self._device)
+                else:
+                    inputs = inputs.to(self._device)
+                
+                # Forward pass
+                outputs = self._network(inputs)
+                
+                # Check if this is auxiliary head fusion
+                if 'auxiliary_logits' not in outputs or not outputs['auxiliary_logits']:
+                    return None  # Not auxiliary head fusion
+                
+                # Collect logits
+                all_logits.append(outputs['logits'].cpu())
+                
+                # Collect auxiliary logits
+                for modality, aux_logits in outputs['auxiliary_logits'].items():
+                    if modality not in all_auxiliary_logits:
+                        all_auxiliary_logits[modality] = []
+                    all_auxiliary_logits[modality].append(aux_logits.cpu())
+                
+                # Collect confidences
+                if 'confidences' in outputs and outputs['confidences']:
+                    for modality, conf in outputs['confidences'].items():
+                        if modality not in all_confidences:
+                            all_confidences[modality] = []
+                        all_confidences[modality].append(conf.cpu())
+                
+                # Collect modality weights
+                if 'modality_weights' in outputs and outputs['modality_weights'] is not None:
+                    all_modality_weights.append(outputs['modality_weights'].cpu())
+        
+        # Concatenate all batches
+        result = {
+            'logits': torch.cat(all_logits, dim=0)
+        }
+        
+        # Concatenate auxiliary logits
+        if all_auxiliary_logits:
+            result['auxiliary_logits'] = {}
+            for modality, logits_list in all_auxiliary_logits.items():
+                result['auxiliary_logits'][modality] = torch.cat(logits_list, dim=0)
+        
+        # Concatenate confidences
+        if all_confidences:
+            result['confidences'] = {}
+            for modality, conf_list in all_confidences.items():
+                result['confidences'][modality] = torch.cat(conf_list, dim=0)
+        
+        # Concatenate modality weights
+        if all_modality_weights:
+            result['modality_weights'] = torch.cat(all_modality_weights, dim=0)
+        
+        return result
+    
     def _extract_data_batch(self, loader, extract_features=True, extract_logits=True, extract_individual_features=False):
         """
         통합된 데이터 추출 함수 - 한 번의 forward pass로 logits, features, labels, individual_features 추출
@@ -993,7 +1181,7 @@ class MMEABaseLearner(BaseLearner):
                     if extract_logits:
                         all_logits.append(outputs["logits"].cpu())
                     
-                    # 2. Features 추출 (fusion 출력)
+                    # 2. Features 추출 (after fusion 출력)
                     if extract_features:
                         features = None
                         if 'fusion_features' in outputs:

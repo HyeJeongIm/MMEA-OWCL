@@ -5,7 +5,7 @@
   
   "backbone": "tbn",
   "arch": "BNInception",
-  "fusion_type": "auxiliary_head_v2_4",
+  "fusion_type": "auxiliary_head_v2_7",
   "consensus_type": "avg",
   "before_softmax": true,
   
@@ -22,23 +22,25 @@
   "lr_steps": [10, 20],
   "momentum": 0.9,
   "weight_decay": 0.0005,
-  "epochs": 7, 
+  "epochs": 50, 
   "clip_gradient": 20,
   
   "memory_size": 320,
   "increment": 4,
   "shuffle": false,
   
+  "pretrain_epochs": 10,
+  "confidence_method": "energy",
+
   "partialbn": true,
   "freeze": false,
   
   "mode": "train",
   "enable_ood": false,
   "ood_methods": ["Energy"],
-  "weights_path": "null",
-
+  "weights_path": "/workspace/MMEA-OWCL/weights/mmea_tbn_replay_auxiliary_head_v2_7_rgbgyroacce_ep50_bs8_pb1_fr0_inc4_mem320_train/Oct11_14-32-42",
   "seed": 1993,
-  "device": [1],
+  "device": [0],
   "prefix": "mmea-owcl",
   "log_test_acc": false,
   "use_wandb": false,

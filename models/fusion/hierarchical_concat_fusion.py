@@ -87,7 +87,7 @@ class HierarchicalConcatFusion(nn.Module):
         
         return master_weight, rgb_entropy_norm
 
-    def forward(self, inputs):
+    def forward(self, inputs, targets=None):
         """
         Forward pass: FusionConcat + 계층적 게이팅
         

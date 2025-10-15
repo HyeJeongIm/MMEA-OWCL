@@ -183,6 +183,9 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
     """Run training mode: train each task and evaluate"""
     logging.info("=== TRAINING MODE ===")
     
+    # OOD 결과 저장소 초기화
+    all_ood_results = {}
+    
     for task_id in range(data_manager.nb_tasks):
         print(f"\nTask {task_id + 1}/{data_manager.nb_tasks} 시작")
         
@@ -195,6 +198,9 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # OOD 평가 (enable_ood=True인 경우에만)
         if args.get("enable_ood", False):
             ood_results, score_distributions, ood_metrics = model.evaluate_ood()
+            # OOD 결과 저장
+            task_key = f"task_{task_id}"
+            all_ood_results[task_key] = ood_results
             # Wandb 로깅 (CL + OOD)
             model.auto_wandb_log(cl_metrics, ood_metrics, task_id + 1)
         else:
@@ -221,6 +227,10 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # 태스크 요약
         cl_acc = cl_results['cnn']['top1']
         print(f"Task {task_id + 1} 완료 - CL 정확도: {cl_acc:.1f}%")
+    
+    # 🎯 모든 task 완료 후 평균 메트릭 계산 및 로깅
+    if args.get("enable_ood", False) and all_ood_results and args.get("use_wandb", False):
+        _log_average_ood_metrics(all_ood_results, args)
 
 
 def _run_eval_mode(args, model, data_manager, all_cl_results):
@@ -278,8 +288,72 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
             logging.error(f"Task {task_id + 1} evaluation failed: {e}")
             continue
     
+    # 🎯 모든 task 완료 후 평균 메트릭 계산 및 로깅
+    if args.get("enable_ood", False) and all_ood_results and args.get("use_wandb", False):
+        _log_average_ood_metrics(all_ood_results, args)
+    
     # OOD 결과가 있으면 반환
     return all_ood_results if all_ood_results else None
+
+
+def _log_average_ood_metrics(all_ood_results, args):
+    """
+    모든 task의 OOD 메트릭 평균 계산 및 Wandb 로깅
+    
+    Args:
+        all_ood_results: {
+            'task_0': {'Energy': {'auroc': 85.3, 'aupr_id': 88.7, ...}},
+            'task_1': {'Energy': {'auroc': 87.1, 'aupr_id': 90.2, ...}},
+            ...
+        }
+        args: 설정 딕셔너리
+    """
+    import wandb
+    
+    logging.info("\n" + "="*70)
+    logging.info("📊 Computing Average OOD Metrics Across All Tasks")
+    logging.info("="*70)
+    
+    # Method별 메트릭 수집
+    method_metrics = {}  # {'Energy': {'auroc': [85.3, 87.1, ...], 'aupr_id': [88.7, 90.2, ...], ...}}
+    
+    for task_key, ood_results in all_ood_results.items():
+        for method_name, metrics in ood_results.items():
+            if 'error' in metrics:
+                continue  # 에러가 있는 결과는 제외
+            
+            if method_name not in method_metrics:
+                method_metrics[method_name] = {}
+            
+            # 각 메트릭 수집
+            for metric_name, metric_value in metrics.items():
+                if isinstance(metric_value, (int, float)):  # 숫자형 메트릭만
+                    if metric_name not in method_metrics[method_name]:
+                        method_metrics[method_name][metric_name] = []
+                    method_metrics[method_name][metric_name].append(metric_value)
+    
+    # 평균 계산 및 로깅
+    avg_metrics = {}
+    
+    for method_name, metrics in method_metrics.items():
+        logging.info(f"\n🔍 {method_name} - Average Metrics:")
+        
+        for metric_name, values in metrics.items():
+            if len(values) > 0:
+                avg_value = sum(values) / len(values)
+                
+                # Wandb 키 생성
+                wandb_key = f"Average_OOD/{method_name}_{metric_name}"
+                avg_metrics[wandb_key] = avg_value
+                
+                # 콘솔 로그
+                logging.info(f"   {metric_name}: {avg_value:.2f}% (over {len(values)} tasks)")
+    
+    # Wandb에 평균 메트릭 로깅
+    if avg_metrics:
+        wandb.log(avg_metrics)
+        logging.info(f"\n✅ Logged {len(avg_metrics)} average OOD metrics to wandb")
+        logging.info("="*70)
 
 
 def _log_final_summary(cl_results, nb_tasks, ood_results=None):
