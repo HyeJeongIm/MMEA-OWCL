@@ -192,7 +192,7 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # 증분 학습
         model.incremental_train(data_manager)
         
-        # CL 평가 (tuple unpacking)
+        # CL 평가
         cl_results, cl_metrics = model.evaluate_cl()
         
         # OOD 평가 (enable_ood=True인 경우에만)
