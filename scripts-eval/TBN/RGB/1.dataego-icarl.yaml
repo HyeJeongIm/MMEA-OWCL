@@ -1,0 +1,39 @@
+# TBN-iCaRL (RGB) Method
+name: 'Evaluate TBN-iCaRL (RGB) Method on DataEgo (Seeds 1993-1997)'
+project: 'Experimental Results on the MMEA-OWCL (CL Training & Evaluation)'
+entity: 'mmea-owcl'
+
+method: grid # or random, bayes
+metric:
+  goal: maximize
+  name: Task/avg_acc
+program: main.py
+
+parameters:
+  dataset:
+    values: ['dataego']
+  train_list:
+    values: ['dataego_train.txt']
+  model_name:
+    values: ['tbn_icarl']
+  workers:
+    values: [4]
+  epochs:
+    values: [50]
+  device:
+    values: [0]
+  # Hyperparameters 
+  modality: 
+    values: [["RGB"]]
+  fusion_type:
+    values: ["concat"]
+  mode:
+    values: ["eval"]
+  increment:
+    values: [10, 5, 2]
+  enable_ood:
+    values: [true]
+  ood_methods:
+    values: [["MSP", "ODIN", "Energy", "LTS_Individual"]]
+  seed:
+    values: [1993, 1994, 1995, 1996, 1997]
