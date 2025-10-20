@@ -12,12 +12,12 @@ import wandb
 from models.base import BaseLearner
 from utils.toolkit import target2onehot, tensor2numpy
 from ood import MSPDetector, EnergyDetector, ODINDetector, LTSIndividualDetector, LTSFusionDetector, LTSRGBOnlyDetector, LTSLateFusionDetector, LTSRGBOnlyNoNormDetector, LTSGyroOnlyDetector, LTSAcceOnlyDetector
-from ood.methods.modality_agreement import ModalityAgreementDetector
-from ood.methods.modality_agreement_v2 import ModalityAgreementV2Detector
-from ood.methods.confidence_variance import ConfidenceVarianceDetector
-from ood.methods.confidence_variance_v2 import ConfidenceVarianceV2Detector
-from ood.methods.weighted_energy import WeightedEnergyDetector
-from ood.methods.modality_discrepancy import ModalityDiscrepancyDetector, ModalityDiscrepancyKLDetector
+# # from ood.methods.modality_agreement import ModalityAgreementDetector
+# from ood.methods.modality_agreement_v2 import ModalityAgreementV2Detector
+# from ood.methods.confidence_variance import ConfidenceVarianceDetector
+# from ood.methods.confidence_variance_v2 import ConfidenceVarianceV2Detector
+# from ood.methods.weighted_energy import WeightedEnergyDetector
+# from ood.methods.modality_discrepancy import ModalityDiscrepancyDetector, ModalityDiscrepancyKLDetector
 from ood.metrics import compute_ood_metrics, compute_threshold_accuracy
 
 
@@ -671,20 +671,20 @@ class MMEABaseLearner(BaseLearner):
                     detector = LTSGyroOnlyDetector(self._network, self._device)
                 elif method_name == "LTS_Acce_Only":
                     detector = LTSAcceOnlyDetector(self._network, self._device)
-                elif method_name == "Modality_Agreement":
-                    detector = ModalityAgreementDetector(self._network, self._device, use_weights=True)
-                elif method_name == "Modality_Agreement_V2":
-                    detector = ModalityAgreementV2Detector(self._network, self._device, mode='hybrid')
-                elif method_name == "Confidence_Variance":
-                    detector = ConfidenceVarianceDetector(self._network, self._device, alpha=0.5, use_mean_only=False)
-                elif method_name == "Confidence_Variance_V2":
-                    detector = ConfidenceVarianceV2Detector(self._network, self._device, mode='mean')
-                elif method_name == "Weighted_Energy":
-                    detector = WeightedEnergyDetector(self._network, self._device, temperature=1.0, fusion_mode='weighted_average')
-                elif method_name == "Modality_Discrepancy_JSD":
-                    detector = ModalityDiscrepancyDetector(self._network, self._device, use_negative=True, normalize=False)
-                elif method_name == "Modality_Discrepancy_KL":
-                    detector = ModalityDiscrepancyKLDetector(self._network, self._device, use_negative=True)
+                # elif method_name == "Modality_Agreement":
+                #     detector = ModalityAgreementDetector(self._network, self._device, use_weights=True)
+                # elif method_name == "Modality_Agreement_V2":
+                #     detector = ModalityAgreementV2Detector(self._network, self._device, mode='hybrid')
+                # elif method_name == "Confidence_Variance":
+                #     detector = ConfidenceVarianceDetector(self._network, self._device, alpha=0.5, use_mean_only=False)
+                # elif method_name == "Confidence_Variance_V2":
+                #     detector = ConfidenceVarianceV2Detector(self._network, self._device, mode='mean')
+                # elif method_name == "Weighted_Energy":
+                #     detector = WeightedEnergyDetector(self._network, self._device, temperature=1.0, fusion_mode='weighted_average')
+                # elif method_name == "Modality_Discrepancy_JSD":
+                #     detector = ModalityDiscrepancyDetector(self._network, self._device, use_negative=True, normalize=False)
+                # elif method_name == "Modality_Discrepancy_KL":
+                #     detector = ModalityDiscrepancyKLDetector(self._network, self._device, use_negative=True)
                 else:
                     logging.warning(f"Unknown OOD method: {method_name}")
                     continue
