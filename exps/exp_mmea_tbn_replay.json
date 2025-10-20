@@ -30,19 +30,30 @@
   "shuffle": false,
   
   "pretrain_epochs": 10,
-  "confidence_method": "energy",
+  "confidence_method": "max_prob",
 
   "partialbn": true,
   "freeze": false,
   
-  "mode": "train",
-  "enable_ood": false,
-  "ood_methods": ["Energy"],
-  "weights_path": "/workspace/MMEA-OWCL/weights/mmea_tbn_replay_auxiliary_head_v2_7_rgbgyroacce_ep50_bs8_pb1_fr0_inc4_mem320_train/Oct11_14-32-42",
+  "mode": "eval",
+  "enable_ood": true,
+  "ood_methods": [
+    "MSP_Baseline",
+    "Energy_Baseline",
+    "ReAct_Baseline",
+    "Scale_Baseline", 
+    "ASH_S_Baseline",
+    "ODIN_Baseline",
+    "Entropy_Baseline",
+    "LTS_Baseline",
+    "MaxLogit_Baseline"
+
+  ],
+  "weights_path": "weights/mmea_tbn_replay_auxiliary_head_v2_7_rgbgyroacce_ep50_bs8_pb1_fr0_inc4_mem320_train/Oct11_22-25-22",
   "seed": 1993,
   "device": [0],
   "prefix": "mmea-owcl",
   "log_test_acc": false,
-  "use_wandb": false,
+  "use_wandb": true,
   "debug_mode": false
 }

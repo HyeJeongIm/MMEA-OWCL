@@ -554,6 +554,27 @@ def _log_final_summary(cl_results, nb_tasks, ood_results=None):
                 logging.info("    AUPR_OOD Ranking (OOD Detection):")
                 for i, (method, score) in enumerate(aupr_ood_scores, 1):
                     logging.info(f"      {i}. {method:8}: {score:5.1f}%")
+            
+            # FPR95 comparison (lower is better)
+            fpr95_scores = []
+            for method in methods:
+                avg_fpr95 = 0
+                valid_tasks = 0
+                for task_id in range(nb_tasks):
+                    task_key = f"task_{task_id}"
+                    if (task_key in ood_results and method in ood_results[task_key] and 
+                        'error' not in ood_results[task_key][method] and
+                        'fpr95' in ood_results[task_key][method]):
+                        avg_fpr95 += ood_results[task_key][method]['fpr95']
+                        valid_tasks += 1
+                if valid_tasks > 0:
+                    fpr95_scores.append((method, avg_fpr95 / valid_tasks))
+            
+            if fpr95_scores:
+                fpr95_scores.sort(key=lambda x: x[1], reverse=False)  # Lower is better
+                logging.info("    FPR95 Ranking (Lower is Better):")
+                for i, (method, score) in enumerate(fpr95_scores, 1):
+                    logging.info(f"      {i}. {method:8}: {score:5.1f}%")
         else:
             logging.info("  No valid OOD results found")
     

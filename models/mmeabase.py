@@ -11,13 +11,17 @@ import wandb
 
 from models.base import BaseLearner
 from utils.toolkit import target2onehot, tensor2numpy
-from ood import MSPDetector, EnergyDetector, ODINDetector, LTSIndividualDetector, LTSFusionDetector, LTSRGBOnlyDetector, LTSLateFusionDetector, LTSRGBOnlyNoNormDetector, LTSGyroOnlyDetector, LTSAcceOnlyDetector
-# # from ood.methods.modality_agreement import ModalityAgreementDetector
-# from ood.methods.modality_agreement_v2 import ModalityAgreementV2Detector
-# from ood.methods.confidence_variance import ConfidenceVarianceDetector
-# from ood.methods.confidence_variance_v2 import ConfidenceVarianceV2Detector
-# from ood.methods.weighted_energy import WeightedEnergyDetector
-# from ood.methods.modality_discrepancy import ModalityDiscrepancyDetector, ModalityDiscrepancyKLDetector
+
+# 🎯 UnifiedOODDetector - MSP/Energy/MaxLogit 통합
+from ood import UnifiedOODDetector
+
+# 🔍 LTS methods
+from ood import LTSFusionDetector
+
+# 🔥 Feature-based OOD methods
+# from ood.methods.mahalanobis import MahalanobisDetector
+
+# 📊 Metrics
 from ood.metrics import compute_ood_metrics, compute_threshold_accuracy
 
 
@@ -605,111 +609,114 @@ class MMEABaseLearner(BaseLearner):
         
         logging.info("=== OOD Detection Results ===")
                 
-        # Check if individual features are needed
-        need_individual_features = "LTS_Individual" in ood_methods
-        need_fusion_features = "LTS_Fusion" in ood_methods
+        # Check if fusion features are needed (only for LTS_Fusion now)
+        need_fusion_features_legacy = "LTS_Fusion" in ood_methods
         
         # Extract data in single forward pass
         print("  📊 Processing ID data (logits + features)...")
-        if need_individual_features:
-            print("  🔍 LTS_Individual detected - also extracting individual modality features...")
-        if need_fusion_features:
+        if need_fusion_features_legacy:
             print("  🔍 LTS_Fusion detected - also extracting fusion features...")
         
         id_data = self._extract_data_batch(
             self.test_loader, 
             extract_features=True, 
             extract_logits=True,
-            extract_individual_features=need_individual_features
+            extract_individual_features=False
         )
         id_logits = id_data['logits']
         id_features = id_data['features'] 
         id_labels = id_data['labels']
-        id_individual_features = id_data['individual_features']
         
         print("  🎯 Processing OOD data (logits + features)...")
         ood_data = self._extract_data_batch(
             self.ood_test_loader, 
             extract_features=True, 
             extract_logits=True,
-            extract_individual_features=need_individual_features
+            extract_individual_features=False
         )
         ood_logits = ood_data['logits']
         ood_features = ood_data['features']
         ood_labels = ood_data['labels']
-        ood_individual_features = ood_data['individual_features']
         
         print(f"✅ Data extracted - ID: logits{id_logits.shape}, features{id_features.shape}")
         print(f"                   OOD: logits{ood_logits.shape}, features{ood_features.shape}")
-        if need_individual_features:
-            print(f"                   Individual features: {len(id_individual_features)} modalities, shapes: {[f.shape for f in id_individual_features]}")
         
         # Store extracted data for visualization
         self._cached_id_data = {'features': id_features, 'labels': id_labels}
         self._cached_ood_data = {'features': ood_features, 'labels': ood_labels}
 
+        # 🔥 Auxiliary outputs 사전 수집 (UnifiedOODDetector Hybrid 모드용)
+        def needs_auxiliary_outputs(method_name):
+            """Check if method needs auxiliary outputs (auxiliary_logits, confidences)"""
+            return method_name.startswith(('MSP_Hybrid_', 'Energy_Hybrid_', 'MaxLogit_Hybrid_'))
+        
+        def needs_fusion_features(method_name):
+            """Check if method needs fusion features (LTS, ReAct, Scale, ASH_S)"""
+            return method_name.startswith(('LTS_', 'ReAct_', 'Scale_', 'ASH_S_'))
+        
+        need_auxiliary_outputs = any(needs_auxiliary_outputs(method) for method in ood_methods)
+        need_fusion_features = any(needs_fusion_features(method) for method in ood_methods)
+        id_auxiliary_outputs = None
+        ood_auxiliary_outputs = None
+        
+        if need_auxiliary_outputs:
+            print("  🔥 UnifiedOODDetector Hybrid methods detected - collecting auxiliary outputs...")
+            id_auxiliary_outputs = self._collect_outputs(self.test_loader)
+            ood_auxiliary_outputs = self._collect_outputs(self.ood_test_loader)
+            
+            if id_auxiliary_outputs is not None and ood_auxiliary_outputs is not None:
+                print(f"  ✅ Auxiliary outputs collected:")
+                print(f"     - Main logits: ✅")
+                print(f"     - Auxiliary logits: {list(id_auxiliary_outputs.get('auxiliary_logits', {}).keys())}")
+                print(f"     - Confidences: {list(id_auxiliary_outputs.get('confidences', {}).keys())}")
+            else:
+                print(f"  ❌ ERROR: Auxiliary outputs not available!")
+                print(f"     Hybrid methods require auxiliary head fusion, but model doesn't provide auxiliary outputs.")
+                print(f"     Please check if your fusion model has auxiliary heads enabled.")
+                raise ValueError("Hybrid OOD methods require auxiliary outputs, but they are not available from the model.")
+
         for method_name in tqdm(ood_methods, desc="OOD Methods", position=0):
             try:
-                # Initialize OOD detector
-                if method_name == "MSP":
-                    detector = MSPDetector(self._network, self._device)
-                elif method_name == "Energy":
-                    detector = EnergyDetector(self._network, self._device)
-                elif method_name == "ODIN":
-                    detector = ODINDetector(self._network, self._device)
-                elif method_name == "LTS_Individual":
-                    detector = LTSIndividualDetector(self._network, self._device)
+                # 🎯 UnifiedOODDetector: 모든 통합 방법론 처리
+                if method_name.startswith(('MSP_', 'Energy_', 'MaxLogit_', 'LTS_', 'ReAct_', 'Scale_', 'ASH_S_', 'ODIN_', 'Entropy_')):
+                    try:
+                        detector = UnifiedOODDetector.from_method_name(self._network, method_name, device=self._device)
+                        logging.info(f"  🔧 Created {method_name} detector:")
+                        logging.info(f"     - Method: {detector.method}")
+                        logging.info(f"     - Mode: {detector.mode}")
+                        logging.info(f"     - Base detector: {detector._base_detector.__class__.__name__}")
+                    except ValueError as e:
+                        logging.warning(f"⚠️  Failed to parse method name '{method_name}': {e}")
+                        continue
+                
+                # 🔍 LTS legacy method (only LTS_Fusion)
                 elif method_name == "LTS_Fusion":
                     detector = LTSFusionDetector(self._network, self._device)
-                elif method_name == "LTS_RGB_Only":
-                    detector = LTSRGBOnlyDetector(self._network, self._device)
-                elif method_name == "LTS_Late_Fusion":
-                    detector = LTSLateFusionDetector(self._network, self._device, fusion_method='weighted_average')
-                elif method_name == "LTS_RGB_Only_No_Norm":
-                    detector = LTSRGBOnlyNoNormDetector(self._network, self._device)
-                elif method_name == "LTS_Gyro_Only":
-                    detector = LTSGyroOnlyDetector(self._network, self._device)
-                elif method_name == "LTS_Acce_Only":
-                    detector = LTSAcceOnlyDetector(self._network, self._device)
-                # elif method_name == "Modality_Agreement":
-                #     detector = ModalityAgreementDetector(self._network, self._device, use_weights=True)
-                # elif method_name == "Modality_Agreement_V2":
-                #     detector = ModalityAgreementV2Detector(self._network, self._device, mode='hybrid')
-                # elif method_name == "Confidence_Variance":
-                #     detector = ConfidenceVarianceDetector(self._network, self._device, alpha=0.5, use_mean_only=False)
-                # elif method_name == "Confidence_Variance_V2":
-                #     detector = ConfidenceVarianceV2Detector(self._network, self._device, mode='mean')
-                # elif method_name == "Weighted_Energy":
-                #     detector = WeightedEnergyDetector(self._network, self._device, temperature=1.0, fusion_mode='weighted_average')
-                # elif method_name == "Modality_Discrepancy_JSD":
-                #     detector = ModalityDiscrepancyDetector(self._network, self._device, use_negative=True, normalize=False)
-                # elif method_name == "Modality_Discrepancy_KL":
-                #     detector = ModalityDiscrepancyKLDetector(self._network, self._device, use_negative=True)
+                
+                # 🎨 Feature transformation methods (ReAct, Scale, ASH-S)
+                elif method_name == "ReAct":
+                    from ood import ReActDetector
+                    detector = ReActDetector(self._network, self._device, threshold=1.0)
+                elif method_name == "Scale":
+                    from ood import ScaleDetector
+                    detector = ScaleDetector(self._network, self._device, percentile=90)
+                elif method_name == "ASH_S":
+                    from ood import ASHSDetector
+                    detector = ASHSDetector(self._network, self._device, percentile=90)
+                
+                # 🌡️ ODIN (requires input data)
+                elif method_name == "ODIN":
+                    from ood import ODINDetector
+                    detector = ODINDetector(self._network, self._device, temperature=1000.0, magnitude=0.0014)
+                
                 else:
-                    logging.warning(f"Unknown OOD method: {method_name}")
+                    logging.warning(f"⚠️  Unknown OOD method: {method_name}")
                     continue
                 
                 logging.info(f"Computing {method_name} scores...")
                 
-                # Special handling for LTS_Individual method (needs individual features)
-                if method_name == "LTS_Individual":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Individual method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_Individual processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Individual features: {len(id_individual_features)} modalities")
-                    for i, feat in enumerate(id_individual_features):
-                        logging.info(f"      Modality {i}: {feat.shape}")
-                    
-                    # Compute scores using pre-extracted individual features
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
-                    
-                    logging.info(f"  ✅ LTS_Individual scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Fusion":
+                # Special handling for LTS_Fusion method
+                if method_name == "LTS_Fusion":
                     if id_features is None or ood_features is None:
                         logging.error("LTS_Fusion method requires fusion features, but they were not extracted!")
                         continue
@@ -729,155 +736,166 @@ class MMEABaseLearner(BaseLearner):
                     ood_scores = detector.compute_scores_with_fusion_features(ood_logits, ood_features_tensor)
                     
                     logging.info(f"  ✅ LTS_Fusion scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_RGB_Only":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_RGB_Only method requires individual features, but they were not extracted!")
+                elif needs_fusion_features(method_name):
+                    # 🔥 LTS methods (UnifiedOODDetector LTS_Baseline only)
+                    logging.info(f"  🔥 Computing {method_name} with fusion features...")
+                    
+                    # Check if this is a UnifiedOODDetector (LTS_Baseline)
+                    if isinstance(detector, UnifiedOODDetector):
+                        # LTS_Baseline: only needs logits + fusion features
+                        id_features_tensor = torch.from_numpy(id_features).to(self._device)
+                        ood_features_tensor = torch.from_numpy(ood_features).to(self._device)
+                        
+                        id_outputs = {'logits': id_logits, 'fusion_features': id_features_tensor}
+                        ood_outputs = {'logits': ood_logits, 'fusion_features': ood_features_tensor}
+                        
+                        logging.info(f"     - Mode: {detector.mode}")
+                        logging.info(f"     - Logits: {id_logits.shape}")
+                        logging.info(f"     - Fusion features: {id_features.shape}")
+                        
+                        id_scores = detector.compute_scores_from_outputs(id_outputs)
+                        ood_scores = detector.compute_scores_from_outputs(ood_outputs)
+                    else:
+                        # Legacy LTS_Fusion detector (already handled above)
+                        logging.warning(f"  ⚠️  {method_name} already handled - skipping")
                         continue
                     
-                    # Check if RGB modality is available
-                    if "RGB" not in self._modality:
-                        logging.warning(f"  ⚠️  LTS_RGB_Only skipped - RGB modality not available in {self._modality}")
+                    logging.info(f"  ✅ Scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}, min={id_scores.min():.4f}, max={id_scores.max():.4f}")
+                    logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}, min={ood_scores.min():.4f}, max={ood_scores.max():.4f}")
+                
+                # 🌡️ ODIN (requires raw input data)
+                elif method_name == "ODIN":
+                    logging.info(f"  🌡️ ODIN processing (with input perturbation):")
+                    logging.info(f"    - Temperature: {detector.temperature}")
+                    logging.info(f"    - Magnitude: {detector.magnitude}")
+                    
+                    # ODIN requires batch-wise processing with raw inputs
+                    id_scores_list = []
+                    ood_scores_list = []
+                    
+                    # Process ID data
+                    for _, inputs, targets in tqdm(self.test_loader, desc="ODIN ID", leave=False):
+                        # Move inputs to device
+                        if isinstance(inputs, dict):
+                            for m in self._modality:
+                                inputs[m] = inputs[m].to(self._device)
+                            # For multi-modal, use first modality (RGB)
+                            main_input = inputs[self._modality[0]]
+                        else:
+                            main_input = inputs.to(self._device)
+                        
+                        # Compute ODIN scores
+                        scores = detector.odin_score(main_input)
+                        id_scores_list.append(scores)
+                    
+                    # Process OOD data
+                    for _, inputs, targets in tqdm(self.ood_test_loader, desc="ODIN OOD", leave=False):
+                        # Move inputs to device
+                        if isinstance(inputs, dict):
+                            for m in self._modality:
+                                inputs[m] = inputs[m].to(self._device)
+                            # For multi-modal, use first modality (RGB)
+                            main_input = inputs[self._modality[0]]
+                        else:
+                            main_input = inputs.to(self._device)
+                        
+                        # Compute ODIN scores
+                        scores = detector.odin_score(main_input)
+                        ood_scores_list.append(scores)
+                    
+                    # Concatenate all scores
+                    id_scores = np.concatenate(id_scores_list, axis=0)
+                    ood_scores = np.concatenate(ood_scores_list, axis=0)
+                    
+                    logging.info(f"  ✅ ODIN scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}")
+                    logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}")
+                
+                # 🎨 Feature transformation methods (ReAct, Scale, ASH-S)
+                elif method_name in ["ReAct", "Scale", "ASH_S"]:
+                    if id_features is None or ood_features is None:
+                        logging.error(f"{method_name} requires features, but they were not extracted!")
                         continue
                     
-                    logging.info(f"  🔍 LTS_RGB_Only processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Model modalities: {self._modality}")
-                    logging.info(f"    - Using RGB modality only (index {self._modality.index('RGB')})")
-                    rgb_idx = self._modality.index('RGB')
-                    logging.info(f"    - RGB features shape: ID={id_individual_features[rgb_idx].shape}, OOD={ood_individual_features[rgb_idx].shape}")
+                    logging.info(f"  🎨 {method_name} processing:")
+                    logging.info(f"    - ID features: {id_features.shape}")
+                    logging.info(f"    - OOD features: {ood_features.shape}")
                     
-                    # Create feature lists containing only RGB features
-                    rgb_id_features = [id_individual_features[rgb_idx]]
-                    rgb_ood_features = [ood_individual_features[rgb_idx]]
+                    # Convert numpy features to tensors
+                    id_features_tensor = torch.from_numpy(id_features).to(self._device)
+                    ood_features_tensor = torch.from_numpy(ood_features).to(self._device)
                     
-                    # Compute scores using RGB features only
-                    id_scores = detector.compute_scores_with_features(id_logits, rgb_id_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, rgb_ood_features)
+                    # Apply transformation
+                    if method_name == "ReAct":
+                        id_transformed = detector.react(id_features_tensor)
+                        ood_transformed = detector.react(ood_features_tensor)
+                        logging.info(f"    - ReAct threshold: {detector.threshold}")
+                    elif method_name == "Scale":
+                        id_transformed = detector.scale(id_features_tensor)
+                        ood_transformed = detector.scale(ood_features_tensor)
+                        logging.info(f"    - Scale percentile: {detector.percentile}")
+                    elif method_name == "ASH_S":
+                        id_transformed = detector.ash_s(id_features_tensor)
+                        ood_transformed = detector.ash_s(ood_features_tensor)
+                        logging.info(f"    - ASH-S percentile: {detector.percentile}")
                     
-                    logging.info(f"  ✅ LTS_RGB_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Late_Fusion":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Late_Fusion method requires individual features, but they were not extracted!")
+                    # Pass through FC layer to get logits
+                    with torch.no_grad():
+                        if hasattr(self._network, 'fc'):
+                            id_transformed_logits = self._network.fc(id_transformed)
+                            ood_transformed_logits = self._network.fc(ood_transformed)
+                        elif hasattr(self._network, 'classifier'):
+                            id_transformed_logits = self._network.classifier(id_transformed)
+                            ood_transformed_logits = self._network.classifier(ood_transformed)
+                        else:
+                            logging.error(f"  ❌ Network has no 'fc' or 'classifier' layer!")
                         continue
                     
-                    logging.info(f"  🔍 LTS_Late_Fusion processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Individual features: {len(id_individual_features)} modalities")
-                    logging.info(f"    - Fusion method: weighted_average")
-                    
-                    # Compute scores using late fusion approach
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
-                    
-                    # Check if method returned None (not applicable)
-                    if id_scores is None or ood_scores is None:
-                        logging.warning(f"  ⚠️  LTS_Late_Fusion returned None - skipping this method")
-                        continue
-                    
-                    logging.info(f"  ✅ LTS_Late_Fusion scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_RGB_Only_No_Norm":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_RGB_Only_No_Norm method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_RGB_Only_No_Norm processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Using RGB modality only (index 0) WITHOUT L2 normalization")
-                    logging.info(f"    - RGB features shape: ID={id_individual_features[0].shape}, OOD={ood_individual_features[0].shape}")
-                    
-                    # Compute scores using RGB features only (no normalization)
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
-                    
-                    logging.info(f"  ✅ LTS_RGB_Only_No_Norm scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Gyro_Only":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Gyro_Only method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    # Check if Gyro modality is available
-                    if "Gyro" not in self._modality:
-                        logging.warning(f"  ⚠️  LTS_Gyro_Only skipped - Gyro modality not available in {self._modality}")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_Gyro_Only processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Model modalities: {self._modality}")
-                    gyro_idx = self._modality.index('Gyro')
-                    logging.info(f"    - Using Gyro modality only (index {gyro_idx})")
-                    logging.info(f"    - Gyro features shape: ID={id_individual_features[gyro_idx].shape}, OOD={ood_individual_features[gyro_idx].shape}")
-                    
-                    # Create feature lists containing only Gyro features
-                    gyro_id_features = [id_individual_features[gyro_idx]]
-                    gyro_ood_features = [ood_individual_features[gyro_idx]]
-                    
-                    # Compute scores using Gyro features only
-                    id_scores = detector.compute_scores_with_features(id_logits, gyro_id_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, gyro_ood_features)
-                    
-                    # Check if method returned None (not applicable)
-                    if id_scores is None or ood_scores is None:
-                        logging.warning(f"  ⚠️  LTS_Gyro_Only returned None - skipping this method")
-                        continue
-                    
-                    logging.info(f"  ✅ LTS_Gyro_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Acce_Only":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Acce_Only method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    # Check if Accelerometer modality is available
-                    if "Acce" not in self._modality:
-                        logging.warning(f"  ⚠️  LTS_Acce_Only skipped - Acce modality not available in {self._modality}")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_Acce_Only processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Model modalities: {self._modality}")
-                    acce_idx = self._modality.index('Acce')
-                    logging.info(f"    - Using Accelerometer modality only (index {acce_idx})")
-                    logging.info(f"    - Accelerometer features shape: ID={id_individual_features[acce_idx].shape}, OOD={ood_individual_features[acce_idx].shape}")
-                    
-                    # Create feature lists containing only Accelerometer features
-                    acce_id_features = [id_individual_features[acce_idx]]
-                    acce_ood_features = [ood_individual_features[acce_idx]]
-                    
-                    # Compute scores using Accelerometer features only
-                    id_scores = detector.compute_scores_with_features(id_logits, acce_id_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, acce_ood_features)
-                    
-                    # Check if method returned None (not applicable)
-                    if id_scores is None or ood_scores is None:
-                        logging.warning(f"  ⚠️  LTS_Acce_Only returned None - skipping this method")
-                        continue
-                    
-                    logging.info(f"  ✅ LTS_Acce_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name in ["Modality_Agreement", "Modality_Agreement_V2", "Confidence_Variance", "Confidence_Variance_V2", "Weighted_Energy", "Modality_Discrepancy_JSD", "Modality_Discrepancy_KL"]:
-                    # Special handling for auxiliary head fusion-based methods
-                    # These methods need full model outputs (auxiliary_logits, confidences, weights)
-                    logging.info(f"  📊 Extracting outputs for {method_name}...")
-                    
-                    id_outputs = self._collect_outputs(self.test_loader)
-                    ood_outputs = self._collect_outputs(self.ood_test_loader)
-                    
-                    if id_outputs is None or ood_outputs is None:
-                        logging.warning(f"  ⚠️  {method_name} requires auxiliary head fusion outputs but they are not available")
-                        continue
-                    
-                    # Compute scores using full outputs
-                    id_scores = detector.compute_scores_from_outputs(id_outputs)
-                    ood_scores = detector.compute_scores_from_outputs(ood_outputs)
+                    # Compute Energy scores
+                    id_scores = torch.logsumexp(id_transformed_logits, dim=1).cpu().numpy()
+                    ood_scores = torch.logsumexp(ood_transformed_logits, dim=1).cpu().numpy()
                     
                     logging.info(f"  ✅ {method_name} scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}")
+                    logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}")
+                
+                elif needs_auxiliary_outputs(method_name):
+                    # 🔥 UnifiedOODDetector Hybrid modes (non-LTS) - use pre-collected auxiliary outputs
+                    if id_auxiliary_outputs is None or ood_auxiliary_outputs is None:
+                        logging.error(f"  ❌ {method_name} requires auxiliary outputs but they are not available!")
+                        logging.error(f"     This should not happen - auxiliary outputs should have been collected.")
+                        raise ValueError(f"Auxiliary outputs required for {method_name} but not available")
+                    
+                    logging.info(f"  📊 Computing {method_name} with auxiliary outputs...")
+                    logging.info(f"     - Main logits: {id_auxiliary_outputs['logits'].shape}")
+                    logging.info(f"     - Auxiliary logits: {list(id_auxiliary_outputs['auxiliary_logits'].keys())}")
+                    if 'confidences' in id_auxiliary_outputs:
+                        logging.info(f"     - Confidences: {list(id_auxiliary_outputs['confidences'].keys())}")
+                    
+                    try:
+                        id_scores = detector.compute_scores_from_outputs(id_auxiliary_outputs)
+                        ood_scores = detector.compute_scores_from_outputs(ood_auxiliary_outputs)
+                        logging.info(f"  ✅ Scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                        logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}, min={id_scores.min():.4f}, max={id_scores.max():.4f}")
+                        logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}, min={ood_scores.min():.4f}, max={ood_scores.max():.4f}")
+                    except ValueError as e:
+                        logging.error(f"  ❌ Failed to compute scores for {method_name}: {e}")
+                        raise
+                
                 else:
-                    # Regular methods using only logits
-                    id_scores = detector.compute_scores_from_cached_logits(id_logits)      
-                    ood_scores = detector.compute_scores_from_cached_logits(ood_logits) 
+                    # Regular methods using only logits (Baseline, Feature-based)
+                    if isinstance(detector, UnifiedOODDetector):
+                        # UnifiedOODDetector: use compute_scores_from_outputs with logits
+                        logging.info(f"  📊 Computing {method_name} (logit-level UnifiedOODDetector)...")
+                        id_outputs = {'logits': id_logits}
+                        ood_outputs = {'logits': ood_logits}
+                        id_scores = detector.compute_scores_from_outputs(id_outputs)
+                        ood_scores = detector.compute_scores_from_outputs(ood_outputs)
+                    else:
+                        # Legacy detectors: use compute_scores_from_cached_logits
+                        id_scores = detector.compute_scores_from_cached_logits(id_logits)      
+                        ood_scores = detector.compute_scores_from_cached_logits(ood_logits) 
                 
                 # Store score distributions for visualization
                 score_distributions[method_name] = {
@@ -894,7 +912,7 @@ class MMEABaseLearner(BaseLearner):
                     cm_fpr95 = metrics['confusion_fpr95']
                     cm_youden = metrics['confusion_youden']
                     
-                    logging.info(f"{method_name}: AUROC={metrics['auroc']:.2f}%, AUPR_ID={metrics['aupr_id']:.2f}%, AUPR_OOD={metrics['aupr_ood']:.2f}%")
+                    logging.info(f"{method_name}: AUROC={metrics['auroc']:.4f}%, AUPR_ID={metrics['aupr_id']:.4f}%, AUPR_OOD={metrics['aupr_ood']:.4f}%, FPR95={metrics['fpr95']:.4f}%")
                     logging.info(f"  CM@FPR95: TP={cm_fpr95['tp']} FP={cm_fpr95['fp']} TN={cm_fpr95['tn']} FN={cm_fpr95['fn']} | TPR={cm_fpr95['tpr']:.3f} FPR={cm_fpr95['fpr']:.3f}")
                     logging.info(f"  CM@YoudenJ: TP={cm_youden['tp']} FP={cm_youden['fp']} TN={cm_youden['tn']} FN={cm_youden['fn']} | YoudenJ={cm_youden['youdenJ']:.3f}")
                     
@@ -905,6 +923,7 @@ class MMEABaseLearner(BaseLearner):
                             f"Task/{method_name}_auroc": metrics['auroc'],
                             f"Task/{method_name}_aupr_id": metrics['aupr_id'],
                             f"Task/{method_name}_aupr_ood": metrics['aupr_ood'],
+                            f"Task/{method_name}_fpr95": metrics['fpr95'],
                             
                             # FPR95 기준 Confusion Matrix
                             f"Task/{method_name}_fpr95_tp": cm_fpr95['tp'],
