@@ -126,9 +126,9 @@ def _train(args, experiment_dir, weights_dir, log_dir):
             image_tmpl[m] = args["flow_prefix"] + "{}_{:06d}.jpg"
     
     # 데이터 매니저 초기화
-    if args["dataset"] == "mmea-tbn":
+    if "tbn" in args["model_name"]:
         data_manager = TBNDataManager(model, image_tmpl, args)
-    elif args["dataset"] == "mmea-tsn":
+    elif "tsn" in args["model_name"]:
         data_manager = TSNDataManager(model, image_tmpl, args)
     else:
         raise NotImplementedError(f"알 수 없는 데이터셋: {args['dataset']}")
@@ -186,11 +186,11 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         model.incremental_train(data_manager)
         
         # CL 평가
-        cl_results = model.evaluate_cl()
+        cl_results, cl_metrics = model.evaluate_cl()
         
         # OOD 평가 (enable_ood=True인 경우에만)
         if args.get("enable_ood", False):
-            ood_results, score_distributions = model.evaluate_ood()
+            ood_results, score_distributions, ood_metrics = model.evaluate_ood()
             # OOD 결과도 저장하고 싶다면 여기서 처리
         
         # 결과 저장
@@ -213,6 +213,10 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # 태스크 요약
         cl_acc = cl_results['cnn']['top1']
         print(f"Task {task_id + 1} 완료 - CL 정확도: {cl_acc:.1f}%")
+        if args["enable_ood"]:
+            model.auto_wandb_log(cl_metrics, ood_metrics, task_id + 1)
+        else:
+            model.auto_wandb_log(cl_metrics, {}, task_id + 1)
 
 
 def _run_eval_mode(args, model, data_manager, all_cl_results):
@@ -238,7 +242,7 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
         
         try:
             # Evaluation 모드로 OOD 평가 실행
-            if args.get("enable_ood", False):
+            if args.get("enable_ood", False) and task_id != data_manager.nb_tasks - 1:
                 cl_results, ood_results, score_distributions = model.inference_mode_evaluation(
                     data_manager, checkpoint_path, task_id
                 )
@@ -249,6 +253,7 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
                 all_ood_results[task_key] = ood_results
             else:
                 logging.warning("enable_ood=False in eval mode. Only CL evaluation will be performed.")
+                model.enable_ood = False if model.enable_ood == True else model.enable_ood
                 cl_results = model.inference_mode_evaluation(
                     data_manager, checkpoint_path, task_id
                 )
@@ -330,6 +335,13 @@ def _log_final_summary(cl_results, nb_tasks, ood_results=None):
             # Summary by metric type
             logging.info("  📊 Performance Summary:")
             
+            # 전체 평균 계산을 위한 변수들
+            overall_auroc_sum = 0
+            overall_aupr_id_sum = 0  
+            overall_aupr_ood_sum = 0
+            overall_methods_count = 0
+            all_final_metrics = {}  # 모든 방법론의 최종 평균을 저장
+            
             for method in methods:
                 avg_auroc = 0
                 avg_aupr_id = 0
@@ -338,19 +350,69 @@ def _log_final_summary(cl_results, nb_tasks, ood_results=None):
                 
                 for task_id in range(nb_tasks):
                     task_key = f"task_{task_id}"
-                    if task_key in ood_results and method in ood_results[task_key]:
-                        metrics = ood_results[task_key][method]
-                        if 'error' not in metrics and 'auroc' in metrics:
-                            avg_auroc += metrics['auroc']
-                            avg_aupr_id += metrics['aupr_id']
-                            avg_aupr_ood += metrics['aupr_ood']
-                            valid_tasks += 1
+                    if (task_key in ood_results and method in ood_results[task_key] and 
+                        'error' not in ood_results[task_key][method]):
+                        avg_auroc += ood_results[task_key][method]['auroc']
+                        avg_aupr_id += ood_results[task_key][method]['aupr_id']
+                        avg_aupr_ood += ood_results[task_key][method]['aupr_ood']
+                        valid_tasks += 1
                 
                 if valid_tasks > 0:
-                    avg_auroc /= valid_tasks
-                    avg_aupr_id /= valid_tasks
-                    avg_aupr_ood /= valid_tasks
-                    logging.info(f"    {method:8}: AUROC={avg_auroc:5.1f}% | AUPR_ID={avg_aupr_id:5.1f}% | AUPR_OOD={avg_aupr_ood:5.1f}%")
+                    method_avg_auroc = avg_auroc / valid_tasks
+                    method_avg_aupr_id = avg_aupr_id / valid_tasks
+                    method_avg_aupr_ood = avg_aupr_ood / valid_tasks
+                    
+                    # 🎯 각 방법론의 최종 단일 점수 계산 (3개 메트릭의 평균)
+                    method_final_score = (method_avg_auroc + method_avg_aupr_id + method_avg_aupr_ood) / 3
+                    
+                    # 개별 방법론 결과 출력
+                    logging.info(f"    {method:8}: AUROC={method_avg_auroc:5.1f}% | AUPR_ID={method_avg_aupr_id:5.1f}% | AUPR_OOD={method_avg_aupr_ood:5.1f}% | Final={method_final_score:5.1f}%")
+                    
+                    # 전체 평균 계산에 추가
+                    overall_auroc_sum += method_avg_auroc
+                    overall_aupr_id_sum += method_avg_aupr_id
+                    overall_aupr_ood_sum += method_avg_aupr_ood
+                    overall_methods_count += 1
+                    
+                    # wandb 로깅용 데이터 저장
+                    all_final_metrics[f"Final/{method}_avg_auroc"] = method_avg_auroc
+                    all_final_metrics[f"Final/{method}_avg_aupr_id"] = method_avg_aupr_id
+                    all_final_metrics[f"Final/{method}_avg_aupr_ood"] = method_avg_aupr_ood
+                    all_final_metrics[f"Final/{method}_final_score"] = method_final_score  # 🎯 각 방법론의 최종 단일 점수
+                    all_final_metrics[f"Final/{method}_valid_tasks"] = valid_tasks
+            
+            # 🎯 최종 전체 평균 OOD 성능 계산 및 로깅
+            logging.info("\n  🏆 Overall OOD Performance:")
+            
+            if overall_methods_count > 0:
+                final_average_auroc = overall_auroc_sum / overall_methods_count
+                final_average_aupr_id = overall_aupr_id_sum / overall_methods_count
+                final_average_aupr_ood = overall_aupr_ood_sum / overall_methods_count
+                final_average_ood = (final_average_auroc + final_average_aupr_id + final_average_aupr_ood) / 3
+                
+                logging.info(f"    Average AUROC across all methods: {final_average_auroc:.1f}%")
+                logging.info(f"    Average AUPR_ID across all methods: {final_average_aupr_id:.1f}%")
+                logging.info(f"    Average AUPR_OOD across all methods: {final_average_aupr_ood:.1f}%")
+                logging.info(f"    🏆 Final Average OOD Score: {final_average_ood:.1f}%")
+                
+                # 전체 평균 메트릭 추가
+                all_final_metrics.update({
+                    "Final/overall_avg_auroc": final_average_auroc,
+                    "Final/overall_avg_aupr_id": final_average_aupr_id, 
+                    "Final/overall_avg_aupr_ood": final_average_aupr_ood,
+                    "Final/average_ood_score": final_average_ood,
+                    "Final/evaluated_methods_count": overall_methods_count
+                })
+                
+                # 🎯 모든 Final 메트릭을 한 번에 wandb에 로깅 (동일한 step)
+                try:
+                    import wandb
+                    if wandb.run is not None and all_final_metrics:
+                        logging.info("📊 Logging all final OOD metrics to wandb in a single step...")
+                        wandb.log(all_final_metrics)
+                        logging.info(f"✅ Logged {len(all_final_metrics)} final metrics to wandb")
+                except:
+                    pass
             
             # Detailed breakdown by metric
             logging.info("\n  📈 Detailed Breakdown:")

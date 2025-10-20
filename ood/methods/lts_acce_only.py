@@ -84,19 +84,19 @@ class LTSAcceOnlyDetector(BaseOODDetector):
         # Ensure all tensors are on the same device
         device = logits.device
         
-        # Check if Accelerometer modality is available (need at least 3 modalities: RGB + Gyro + Acce)
-        if len(individual_features) < 3:
-            logging.warning("❌ [LTS_Acce_Only] Accelerometer modality not available! This model has fewer than 3 modalities.")
-            logging.warning("    ❌ Returning None - this method is not applicable to models without Accelerometer.")
+        # Check if individual features are available
+        if len(individual_features) == 0:
+            logging.warning("❌ [LTS_Acce_Only] No individual features provided!")
+            logging.warning("    ❌ Returning None - cannot compute Acce-only LTS without features.")
             return None
         
-        # Extract Accelerometer features (index 2)
-        acce_features = individual_features[2].to(device)
+        # Extract Accelerometer features (mmeabase.py ensures only Acce features are passed)
+        acce_features = individual_features[0].to(device)  # First (and only) feature is Acce
         
         # 입력 데이터 정보 로깅
         logging.info(f"  📥 Input logits shape: {logits.shape}")
         logging.info(f"  📥 Accelerometer features shape: {acce_features.shape}")
-        logging.info(f"  🎯 Using Accelerometer modality only (index 2 out of {len(individual_features)} modalities)")
+        logging.info(f"  🎯 Using Accelerometer modality only (received {len(individual_features)} feature tensor)")
         
         # Step 1: Apply L2 normalization to Accelerometer features for consistency
         acce_features_normalized = F.normalize(acce_features, p=2, dim=1)

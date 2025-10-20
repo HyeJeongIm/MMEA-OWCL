@@ -1,17 +1,10 @@
 import numpy as np
+from collections import OrderedDict
 from torchvision import datasets, transforms
 from utils.toolkit import split_images_labels
 from .mydataset import MyDataSet
 from utils.transforms import ArrayToTensor, DataStack, GroupNormalize, IdentityTransform, ImgStack, ToTorchFormatTensor, GroupScale, GroupCenterCrop
-import torch.utils.data as data
-
-
-COMMON_CLASS_ORDER = [
-    26, 14, 23, 4, 11, 25, 31, 10,
-    29, 5, 6, 9, 17, 22, 2, 19,
-    13, 1, 21, 16, 8, 3, 27, 28,
-    15, 30, 0, 7, 12, 18, 20, 24
-]
+from dataloader.data_class_order import UESTC_MMEA_CLASS_ORDER, DATAEGO_CLASS_ORDER
 
 
 class iData(object):
@@ -21,9 +14,9 @@ class iData(object):
     class_order = None
 
 
-class iUESTC_MMEA_TBN(iData):
+class iData_TBN(iData):
     use_path = False
-    class_order = COMMON_CLASS_ORDER
+    class_order = None
 
     def __init__(self, model, modality, arch, train_list, test_list):
         self.modality = modality
@@ -95,11 +88,11 @@ class iUESTC_MMEA_TBN(iData):
             targets.append(dataset.video_list[i].label)
 
         return targets
+    
 
-
-class iUESTC_MMEA_TSN(iData):
+class iData_TSN(iData):
     use_path = False
-    class_order = COMMON_CLASS_ORDER
+    class_order = None
 
     def __init__(self, model, modality, arch, train_list, test_list):
         self.modality = modality
@@ -165,3 +158,69 @@ class iUESTC_MMEA_TSN(iData):
             targets.append(dataset.video_list[i].label)
 
         return targets
+
+
+# UESTC-MMEA
+class iUESTC_MMEA_TBN(iData_TBN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = UESTC_MMEA_CLASS_ORDER
+        self.input_mean = OrderedDict({
+            'RGB': [104, 117, 128],
+            'Flow': [128],
+            'Acce': [0.0352, 0.3717, -0.7944],
+            'Gyro': [78.5445, -2.1253, -6.6940],
+        })
+        self.input_std = OrderedDict({
+            'RGB': [1, 1, 1],
+            'Flow': [1],
+            'Acce': [0.1836, 0.4058, 0.2219],
+            'Gyro': [352.5285, 181.1698, 286.6291],
+        })
+
+class iUESTC_MMEA_TSN(iData_TSN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = UESTC_MMEA_CLASS_ORDER
+        self.input_mean = OrderedDict({
+            'RGB':  [.485, .456, .406],
+            'Acce': [.485, .456, .406],
+            'Gyro': [.485, .456, .406]
+        })
+        self.input_std = OrderedDict({
+            'RGB':  [.229, .224, .225],
+            'Acce': [.229, .224, .225],
+            'Gyro': [.229, .224, .225]
+        })
+
+# DataEgo
+class iDataEgo_TBN(iData_TBN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = DATAEGO_CLASS_ORDER
+        self.input_mean = OrderedDict({
+            'RGB':  [109, 108, 102],
+            'Acce': [1.598, 7.939, 1.104],
+            'Gyro': [-0.039, -0.090, -0.004]
+        })
+        self.input_std = OrderedDict({
+            'RGB':  [1, 1, 1],
+            'Acce': [1.431, 2.831, 4.506],
+            'Gyro': [3.299, 6.858, 2.558]
+        })
+
+
+class iDataEgo_TSN(iData_TSN):
+    def __init__(self, model, modality, arch, train_list, test_list):
+        super().__init__(model, modality, arch, train_list, test_list)
+        self.class_order = DATAEGO_CLASS_ORDER
+        self.input_mean = OrderedDict({
+            'RGB':  [0, 0, 0],
+            'Acce': [0, 0, 0],
+            'Gyro': [0, 0, 0]
+        })
+        self.input_std = OrderedDict({
+            'RGB':  [1, 1, 1],
+            'Acce': [1, 1, 1],
+            'Gyro': [1, 1, 1]
+        })

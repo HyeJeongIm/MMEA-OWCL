@@ -228,6 +228,7 @@ class MMEABaseLearner(BaseLearner):
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
         
         # Standard CL accuracy evaluation
+        cl_metrics = {}
         cnn_accy, nme_accy = self.eval_task()
         
         if nme_accy is not None:
@@ -235,18 +236,25 @@ class MMEABaseLearner(BaseLearner):
         else:
             logging.info(f"CL Accuracy - CNN: {cnn_accy['top1']:.2f}%, NME: Not Available")
             
-        # Log task metrics to W&B 
+        # Log task metrics to W&B (모든 CL 메트릭을 한 번에 로깅)
         if self.args.get('use_wandb', False):
-            wandb.log({"Task/avg_acc": cnn_accy['top1']})
+            cl_metrics.update({"Task/avg_acc": cnn_accy['top1']})
+            
+            # CL grouped accuracy 추가
             for k, v in cnn_accy['grouped'].items():
-                wandb.log({f"Task/[{k}]_acc": v})
+                cl_metrics.update({f"Task/[{k}]_acc": v})
 
+            # NME accuracy 추가 (있는 경우)
             if nme_accy is not None:
-                wandb.log({"Task/nme_avg_acc": nme_accy['top1']})
+                cl_metrics.update({"Task/nme_avg_acc": nme_accy['top1']})
                 for k, v in nme_accy.get('grouped', {}).items():
-                    wandb.log({f"Task/NME_[{k}]_acc": v})
+                    cl_metrics.update({f"Task/NME_[{k}]_acc": v})
+            
+            # 🎯 모든 CL 메트릭을 한 번에 로깅 (동일한 step)
+            logging.info("📊 Logging all CL metrics to wandb in a single step...")
+            logging.info(f"✅ Logged {len(cl_metrics)} CL metrics to wandb")
         
-        return {'cnn': cnn_accy, 'nme': nme_accy if nme_accy else {'top1': 0.0, 'grouped': {}}}
+        return {'cnn': cnn_accy, 'nme': nme_accy if nme_accy else {'top1': 0.0, 'grouped': {}}}, cl_metrics
 
     def evaluate_ood(self):
         """Evaluate only OOD detection performance"""
@@ -272,6 +280,7 @@ class MMEABaseLearner(BaseLearner):
         
         ood_results = {}
         score_distributions = {}
+        ood_methods_metrics = {}  # 모든 OOD 메트릭을 저장할 딕셔너리
         
         logging.info("=== OOD Detection Results ===")
                 
@@ -390,15 +399,26 @@ class MMEABaseLearner(BaseLearner):
                         logging.error("LTS_RGB_Only method requires individual features, but they were not extracted!")
                         continue
                     
+                    # Check if RGB modality is available
+                    if "RGB" not in self._modality:
+                        logging.warning(f"  ⚠️  LTS_RGB_Only skipped - RGB modality not available in {self._modality}")
+                        continue
+                    
                     logging.info(f"  🔍 LTS_RGB_Only processing:")
                     logging.info(f"    - ID logits: {id_logits.shape}")
                     logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Using RGB modality only (index 0)")
-                    logging.info(f"    - RGB features shape: ID={id_individual_features[0].shape}, OOD={ood_individual_features[0].shape}")
+                    logging.info(f"    - Model modalities: {self._modality}")
+                    logging.info(f"    - Using RGB modality only (index {self._modality.index('RGB')})")
+                    rgb_idx = self._modality.index('RGB')
+                    logging.info(f"    - RGB features shape: ID={id_individual_features[rgb_idx].shape}, OOD={ood_individual_features[rgb_idx].shape}")
+                    
+                    # Create feature lists containing only RGB features
+                    rgb_id_features = [id_individual_features[rgb_idx]]
+                    rgb_ood_features = [ood_individual_features[rgb_idx]]
                     
                     # Compute scores using RGB features only
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
+                    id_scores = detector.compute_scores_with_features(id_logits, rgb_id_features)
+                    ood_scores = detector.compute_scores_with_features(ood_logits, rgb_ood_features)
                     
                     logging.info(f"  ✅ LTS_RGB_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
                 elif method_name == "LTS_Late_Fusion":
@@ -443,16 +463,26 @@ class MMEABaseLearner(BaseLearner):
                         logging.error("LTS_Gyro_Only method requires individual features, but they were not extracted!")
                         continue
                     
+                    # Check if Gyro modality is available
+                    if "Gyro" not in self._modality:
+                        logging.warning(f"  ⚠️  LTS_Gyro_Only skipped - Gyro modality not available in {self._modality}")
+                        continue
+                    
                     logging.info(f"  🔍 LTS_Gyro_Only processing:")
                     logging.info(f"    - ID logits: {id_logits.shape}")
                     logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Using Gyro modality only (index 1)")
-                    if len(id_individual_features) > 1:
-                        logging.info(f"    - Gyro features shape: ID={id_individual_features[1].shape}, OOD={ood_individual_features[1].shape}")
+                    logging.info(f"    - Model modalities: {self._modality}")
+                    gyro_idx = self._modality.index('Gyro')
+                    logging.info(f"    - Using Gyro modality only (index {gyro_idx})")
+                    logging.info(f"    - Gyro features shape: ID={id_individual_features[gyro_idx].shape}, OOD={ood_individual_features[gyro_idx].shape}")
+                    
+                    # Create feature lists containing only Gyro features
+                    gyro_id_features = [id_individual_features[gyro_idx]]
+                    gyro_ood_features = [ood_individual_features[gyro_idx]]
                     
                     # Compute scores using Gyro features only
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
+                    id_scores = detector.compute_scores_with_features(id_logits, gyro_id_features)
+                    ood_scores = detector.compute_scores_with_features(ood_logits, gyro_ood_features)
                     
                     # Check if method returned None (not applicable)
                     if id_scores is None or ood_scores is None:
@@ -465,16 +495,26 @@ class MMEABaseLearner(BaseLearner):
                         logging.error("LTS_Acce_Only method requires individual features, but they were not extracted!")
                         continue
                     
+                    # Check if Accelerometer modality is available
+                    if "Acce" not in self._modality:
+                        logging.warning(f"  ⚠️  LTS_Acce_Only skipped - Acce modality not available in {self._modality}")
+                        continue
+                    
                     logging.info(f"  🔍 LTS_Acce_Only processing:")
                     logging.info(f"    - ID logits: {id_logits.shape}")
                     logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Using Accelerometer modality only (index 2)")
-                    if len(id_individual_features) > 2:
-                        logging.info(f"    - Accelerometer features shape: ID={id_individual_features[2].shape}, OOD={ood_individual_features[2].shape}")
+                    logging.info(f"    - Model modalities: {self._modality}")
+                    acce_idx = self._modality.index('Acce')
+                    logging.info(f"    - Using Accelerometer modality only (index {acce_idx})")
+                    logging.info(f"    - Accelerometer features shape: ID={id_individual_features[acce_idx].shape}, OOD={ood_individual_features[acce_idx].shape}")
+                    
+                    # Create feature lists containing only Accelerometer features
+                    acce_id_features = [id_individual_features[acce_idx]]
+                    acce_ood_features = [ood_individual_features[acce_idx]]
                     
                     # Compute scores using Accelerometer features only
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
+                    id_scores = detector.compute_scores_with_features(id_logits, acce_id_features)
+                    ood_scores = detector.compute_scores_with_features(ood_logits, acce_ood_features)
                     
                     # Check if method returned None (not applicable)
                     if id_scores is None or ood_scores is None:
@@ -506,9 +546,9 @@ class MMEABaseLearner(BaseLearner):
                     logging.info(f"  CM@FPR95: TP={cm_fpr95['tp']} FP={cm_fpr95['fp']} TN={cm_fpr95['tn']} FN={cm_fpr95['fn']} | TPR={cm_fpr95['tpr']:.3f} FPR={cm_fpr95['fpr']:.3f}")
                     logging.info(f"  CM@YoudenJ: TP={cm_youden['tp']} FP={cm_youden['fp']} TN={cm_youden['tn']} FN={cm_youden['fn']} | YoudenJ={cm_youden['youdenJ']:.3f}")
                     
-                    # Log OOD metrics to W&B
+                    # 🔄 모든 OOD 메트릭을 하나의 딕셔너리에 수집 (개별 wandb.log 호출 대신)
                     if self.args.get('use_wandb', False):
-                        wandb.log({
+                        ood_methods_metrics.update({
                             # Core metrics
                             f"Task/{method_name}_auroc": metrics['auroc'],
                             f"Task/{method_name}_aupr_id": metrics['aupr_id'],
@@ -555,7 +595,7 @@ class MMEABaseLearner(BaseLearner):
             'score_distributions': score_distributions
         }
         
-        return ood_results, score_distributions
+        return ood_results, score_distributions, ood_methods_metrics
     
     def load_checkpoint(self, checkpoint_path):
         """Load model from checkpoint for inference"""
@@ -576,6 +616,13 @@ class MMEABaseLearner(BaseLearner):
         if 'tasks' in checkpoint:
             self._cur_task = checkpoint['tasks']
             logging.info(f"✅ Task info loaded: current task = {self._cur_task}")
+        
+        # iCaRL: Load class means for NME evaluation if available
+        if 'class_means' in checkpoint:
+            self._class_means = checkpoint['class_means']
+            logging.info(f"✅ Class means loaded for {len(self._class_means)} classes")
+        else:
+            logging.warning("⚠️  No class means found in checkpoint - NME evaluation will be unavailable")
         
         self._network.eval()
         return checkpoint
@@ -620,12 +667,14 @@ class MMEABaseLearner(BaseLearner):
         # Perform evaluation
         if self.enable_ood:
             # Perform both CL and OOD evaluation
-            cl_results = self.evaluate_cl()
-            ood_results, score_distributions = self.evaluate_ood()
+            cl_results, cl_metrics = self.evaluate_cl()
+            ood_results, score_distributions, ood_metrics = self.evaluate_ood()
+            self.auto_wandb_log(cl_metrics, ood_metrics, self._cur_task + 1)
             return cl_results, ood_results, score_distributions
         else:
             # Perform only CL evaluation
-            cl_results = self.evaluate_cl()
+            cl_results, cl_metrics = self.evaluate_cl()
+            self.auto_wandb_log(cl_metrics, {}, self._cur_task + 1)
             return cl_results
     
     def _update_classifier(self, nb_classes):
@@ -813,3 +862,14 @@ class MMEABaseLearner(BaseLearner):
         result = self._extract_data_batch(loader, extract_features=True, extract_logits=False)
         return result.get('features'), result.get('labels')
   
+    def auto_wandb_log(self, cl_metrics, ood_metrics, task_id):
+        if self.args["use_wandb"]:
+            all_metrics = {}
+            all_metrics.update(cl_metrics)
+            all_metrics.update(ood_metrics)
+            all_metrics.update({"Task/Task_ID": task_id})
+            
+            # 🎯 모든 CL + OOD 메트릭을 한 번에 로깅 (동일한 step)
+            logging.info("📊 Logging all CL + OOD metrics to wandb in a single step...")
+            wandb.log(all_metrics)
+            logging.info(f"✅ Logged {len(cl_metrics)} CL + {len(ood_metrics)} OOD metrics to wandb")

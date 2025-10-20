@@ -5,7 +5,7 @@ import numpy as np
 
 from models.mmeabase import MMEABaseLearner
 from models.baseline_tbn import TBNBaseline
-
+from models.baseline_tsn import TSNBaseline
 
 class UpperBound(MMEABaseLearner):
     """
@@ -73,3 +73,18 @@ class TBN_UpperBound(UpperBound):
         logging.info(f"   🎨 Fusion: {args.get('fusion_type', 'concat')}")
         logging.info(f"   📈 Epochs: {self._epochs}")
         logging.info(f"   🔧 Device: {self._device}")
+        
+class TSN_UpperBound(UpperBound):
+    """TBN Upper-Bound Model for comprehensive performance analysis"""
+    
+    def __init__(self, args):
+        super().__init__(args)
+        self._network = TSNBaseline(args)
+        
+        logging.info("🎯 TBN Upper-Bound Model initialized")
+        logging.info(f"   🏗️  Network: TBNBaseline")
+        logging.info(f"   📊 Modalities: {self._modality}")
+        logging.info(f"   🎨 Fusion: {args.get('fusion_type', 'concat')}")
+        logging.info(f"   📈 Epochs: {self._epochs}")
+        logging.info(f"   🔧 Device: {self._device}")
+

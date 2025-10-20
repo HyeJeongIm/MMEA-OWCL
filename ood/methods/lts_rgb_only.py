@@ -75,7 +75,7 @@ class LTSRGBOnlyDetector(BaseOODDetector):
         Args:
             logits: (batch_size, num_classes) - pre-computed logits
             individual_features: list of feature tensors for each modality
-                                [RGB, Gyro, Acce, ...] - RGB is at index 0
+                                Features are ordered according to model's modality list
         Returns:
             scores: numpy array of shape (batch_size,)
         """
@@ -84,17 +84,21 @@ class LTSRGBOnlyDetector(BaseOODDetector):
         # Ensure all tensors are on the same device
         device = logits.device
         
-        # Extract RGB features only (assuming RGB is the first modality)
+        # Check if any features are available
         if len(individual_features) == 0:
-            logging.error("No individual features provided!")
-            return self._compute_scores_from_logits(logits)
+            logging.warning("❌ [LTS_RGB_Only] No individual features provided!")
+            logging.warning("    ❌ Returning None - cannot compute RGB-only LTS without features.")
+            return None
         
-        rgb_features = individual_features[0].to(device)  # RGB is index 0
+        # For RGB-only method, we need to find RGB features
+        # In single modality models, the single modality is at index 0
+        # We assume the model has RGB if this method is called
+        rgb_features = individual_features[0].to(device)  # First (and potentially only) modality
         
         # 입력 데이터 정보 로깅
         logging.info(f"  📥 Input logits shape: {logits.shape}")
         logging.info(f"  📥 RGB features shape: {rgb_features.shape}")
-        logging.info(f"  🎯 Using RGB modality only (index 0 out of {len(individual_features)} modalities)")
+        logging.info(f"  🎯 Using RGB modality only (received {len(individual_features)} feature tensor)")
         
         # Step 1: Apply L2 normalization to RGB features for consistency
         rgb_features_normalized = F.normalize(rgb_features, p=2, dim=1)
