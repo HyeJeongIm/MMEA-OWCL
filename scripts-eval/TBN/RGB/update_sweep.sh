@@ -39,11 +39,11 @@ for METHOD in "iCaRL" "Replay" "EWC" "LwF" "Upperbound" ; do
         echo "✅ Extracted Sweep ID: $SWEEP_ID for $METHOD"
 
         # Append the formatted sweep command to the script
-        echo -e "# $METHOD\nwandb agent 'mmea-owcl/Experimental Results on the MMEA-OWCL (CL Training & Evaluation)/$SWEEP_ID'" >> "$RUN_STD_FILE"
+        echo -e "# $METHOD\nwandb agent 'mmea-owcl/Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)/$SWEEP_ID'" >> "$RUN_STD_FILE"
     
         # # Execute the wandb agent immediately
         # echo "🚀 Running wandb agent for $METHOD..."
-        # CUDA_VISIBLE_DEVICES=1 wandb agent "mmea-owcl/Experimental Results on the MMEA-OWCL (CL Training & Evaluation)/$SWEEP_ID" --count 1
+        # CUDA_VISIBLE_DEVICES=1 wandb agent "mmea-owcl/Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)/$SWEEP_ID" --count 1
     else
         echo "❌ Failed to extract Sweep ID for $METHOD"
     fi

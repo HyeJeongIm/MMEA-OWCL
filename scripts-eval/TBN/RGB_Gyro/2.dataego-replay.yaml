@@ -1,6 +1,6 @@
 # TBN-Replay (RGB_Gyro) Method
 name: 'Evaluate TBN-Replay (RGB_Gyro) Method on DataEgo (Seeds 1993-1997)'
-project: 'Experimental Results on the MMEA-OWCL (CL Training & Evaluation)'
+project: 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
 entity: 'mmea-owcl'
 
 method: grid # or random, bayes
