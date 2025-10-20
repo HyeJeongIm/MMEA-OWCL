@@ -9,11 +9,8 @@ Usage:
     python main.py -d mmea -m tbn_replay -f auxiliary_head_v2_8 -c energy -g 0
     python main.py -d mmea -m tbn_replay -f auxiliary_head_v2_7 -c max_prob -g 1
     
-    # Weights 경로 지정 (eval 모드에서 유용)
-    python main.py -d mmea -m tbn_replay -f auxiliary_head_v2_7 -c max_prob -g 0 -w weights/mmea_tbn_replay_auxiliary_head_v2_7_rgbgyroacce_ep50_bs8_pb1_fr0_inc4_mem320_train/Oct11_22-25-22
-    
     # Long options 사용 (명확함)
-    python main.py -d mmea -m tbn_replay --confidence energy --device 0 --weights weights/...
+    python main.py -d mmea -m tbn_replay --confidence energy --device 0
     
     # Multi-GPU
     python main.py -d mmea -m tbn_replay -g 0 1
@@ -48,8 +45,6 @@ def main():
                         help='Confidence 계산 방법 (auxiliary_head_v2_7/8/9에서 사용, JSON 설정을 덮어씀)')
     parser.add_argument('-g', '--device', type=int, nargs='+',
                         help='GPU device ID(s) 선택 (예: --device 0 또는 -g 0, JSON 설정을 덮어씀)')
-    parser.add_argument('-w', '--weights', type=str,
-                        help='가중치 경로 (예: weights/..., JSON 설정을 덮어씀)')
     parser.add_argument('--wandb_project', type=str, default='MMEA-OWCL_hj_test')
     parser.add_argument('--wandb_entity', type=str, default='mmea-owcl')
     parser.add_argument('--debug_mode', action='store_true',
@@ -74,10 +69,6 @@ def main():
         # Command line에서 --device 0 또는 --device 0 1 형태로 입력받음
         # 이미 list 형태이므로 그대로 사용
         pass
-    
-    # weights -> weights_path로 매핑
-    if args_dict.get('weights') is not None:
-        args_dict['weights_path'] = args_dict.pop('weights')
     
     config.update(args_dict)
 
@@ -133,7 +124,6 @@ def main():
     print(f"✓ Tasks        : Initial {config.get('init_cls')} + {config.get('increment')} each increment")
     print(f"✓ Confidence   : {config.get('confidence_method', 'max_prob (default)')}")
     print(f"✓ Device(s)    : {config.get('device', [0])}")
-    print(f"✓ Weights Path : {config.get('weights_path', 'Not specified (training mode)')}")
     print(f"✓ OOD Methods  : {config.get('ood_methods')}")
     print(f"✓ Use W&B      : {bool(config.get('use_wandb'))}")
     print("=" * 60)

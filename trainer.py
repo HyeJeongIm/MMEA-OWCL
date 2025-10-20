@@ -27,17 +27,16 @@ def train(args):
     fusion_type = args.get('fusion_type', 'concat')
     
     experiment_name_parts = [
-        args['dataset'],  # mmea-tbn -> mmea_tbn
+        args['dataset'],
         args['model_name'],
-        fusion_type,  # fusion_type 추가
+        fusion_type,
         modality_str,
         f"ep{args['epochs']}",
         f"bs{args['batch_size']}",
         f"pb{pb_flag}",
         f"fr{fr_flag}",
         f"inc{args['increment']}",
-        f"mem{args['memory_size']}",
-        args.get('mode', 'train')
+        f"mem{args['memory_size']}"
     ]
     
     if suffix:
@@ -45,39 +44,44 @@ def train(args):
     
     experiment_name = '_'.join(experiment_name_parts)
     
-    timestamp = datetime.datetime.now().strftime('%b%d_%H-%M-%S')
-    experiment_dir = os.path.join(experiment_name, timestamp)
+    experiment_dir = os.path.join(experiment_name, f"seed_{args['seed']}")
+    log_dir = os.path.join("logs", experiment_dir)
+    weights_dir = os.path.join(log_dir, "weights")
+    results_dir = os.path.join(log_dir, "results")
     
     # mode에 따른 디렉토리 생성
     mode = args.get('mode', 'train')
     
     if mode == 'eval':
         # eval 모드: results/ 폴더 안에 실험 디렉토리 생성
-        results_dir = os.path.join("results", experiment_dir)
         os.makedirs(results_dir, exist_ok=True)
         
         print(f"✓ [EVAL] 실험 디렉토리 생성: {experiment_dir}")
         print(f"✓ [EVAL] 결과 저장 경로: {results_dir}")
+        print(f"✓ [EVAL] 모델 가중치 로드 경로: {weights_dir}")
+        
+        # train 모드에서는 파일 로깅도 포함
+        log_name = f"eval_{args['prefix']}_{args['seed']}_{args['model_name']}_" \
+                   f"{args['dataset']}_{args['init_cls']}_{args['increment']}.log"
+        log_path = os.path.join(results_dir, log_name)
         
         # eval 모드에서는 간단한 로거 설정 (콘솔 출력만)
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s [%(filename)s] => %(message)s",
             handlers=[
+                logging.FileHandler(log_path),
                 logging.StreamHandler(sys.stdout),
             ]
         )
     else:
         # train 모드: 기존과 동일 (weights/, logs/ 폴더)
-        weights_dir = os.path.join("weights", experiment_dir)
-        log_dir = os.path.join("logs", experiment_dir)
-        
-        os.makedirs(weights_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(weights_dir, exist_ok=True)
         
         print(f"✓ [TRAIN] 실험 디렉토리 생성: {experiment_dir}")
-        print(f"✓ [TRAIN] 모델 가중치 저장 경로: {weights_dir}")
         print(f"✓ [TRAIN] 로그 저장 경로: {log_dir}")
+        print(f"✓ [TRAIN] 모델 가중치 저장 경로: {weights_dir}")
         
         # train 모드에서는 파일 로깅도 포함
         log_name = f"{args['prefix']}_{args['seed']}_{args['model_name']}_" \
@@ -104,7 +108,7 @@ def train(args):
     # mode에 따른 실행
     if mode == 'eval':
         # eval 모드에서는 weights_dir, log_dir가 없으므로 None 전달
-        _train(args, experiment_dir, None, None)
+        _train(args, experiment_dir, weights_dir, None)
     else:
         # train 모드
         _train(args, experiment_dir, weights_dir, log_dir)
@@ -145,7 +149,7 @@ def _train(args, experiment_dir, weights_dir, log_dir):
     execution_mode = args.get("mode", "train")
     
     if execution_mode == "eval":
-        all_ood_results = _run_eval_mode(args, model, data_manager, all_cl_results)
+        all_ood_results = _run_eval_mode(args, model, data_manager, weights_dir, all_cl_results)
     elif execution_mode == "train":
         _run_training_mode(args, model, data_manager, weights_dir, all_cl_results)
     elif execution_mode == "upperbound":
@@ -233,17 +237,13 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         _log_average_ood_metrics(all_ood_results, args)
 
 
-def _run_eval_mode(args, model, data_manager, all_cl_results):
+def _run_eval_mode(args, model, data_manager, weights_dir, all_cl_results):
     """Run evaluation mode: load pre-trained weights and evaluate OOD only"""
     logging.info("=== EVALUATION MODE ===")
     
-    # 가중치 경로 확인
-    weights_path = args.get("weights_path")
-    if not weights_path:
-        raise ValueError("weights_path is required for eval mode")
-    
-    if not os.path.exists(weights_path):
-        raise FileNotFoundError(f"Weights directory not found: {weights_path}")
+    # 가중치 경로 확인    
+    if not os.path.exists(weights_dir):
+        raise FileNotFoundError(f"Weights directory not found: {weights_dir}")
     
     # OOD 결과 저장소 초기화
     all_ood_results = {}
@@ -252,7 +252,7 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
         print(f"\nTask {task_id + 1}/{data_manager.nb_tasks} OOD 평가 시작")
         
         # 체크포인트 경로 찾기
-        checkpoint_path = os.path.join(weights_path, f"task_{task_id}_checkpoint_{task_id}.pkl")
+        checkpoint_path = os.path.join(weights_dir, f"task_{task_id}_checkpoint_{task_id}.pkl")
         
         try:
             # Evaluation 모드로 OOD 평가 실행
