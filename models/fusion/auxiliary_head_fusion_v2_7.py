@@ -205,19 +205,6 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
             margin = top2_probs[:, 0] - top2_probs[:, 1]
             confidence = margin  # 이미 [0, 1] 범위
             
-        elif self.confidence_method == "variance":
-            # Variance: 확률 분포의 분산 (낮을수록 확실)
-            mean = probs.mean(dim=1, keepdim=True)
-            variance = torch.sum((probs - mean) ** 2, dim=1) / self.num_classes
-            # Variance를 confidence로 변환 (낮은 variance = 높은 confidence)
-            max_variance = 1.0 / self.num_classes  # 최대 분산 (균등 분포)
-            confidence = 1.0 - (variance / max_variance).clamp(0, 1)
-            
-        elif self.confidence_method == "doctor":
-            # DOCtor: max_prob - second_max_prob (margin과 유사하지만 명시적)
-            sorted_probs, _ = torch.sort(probs, dim=1, descending=True)
-            confidence = sorted_probs[:, 0] - sorted_probs[:, 1]
-            
         else:
             # Default: 균등 신뢰도
             confidence = torch.ones(logits.size(0), device=logits.device) / len(self.modality)

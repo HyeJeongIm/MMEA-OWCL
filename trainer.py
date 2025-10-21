@@ -39,6 +39,11 @@ def train(args):
         f"mem{args['memory_size']}"
     ]
     
+    # auxiliary_head를 사용하는 경우에만 confidence_method를 경로에 추가
+    if 'auxiliary_head' in fusion_type:
+        confidence_method = args.get('confidence_method', 'energy')
+        experiment_name_parts.append(confidence_method)
+    
     if suffix:
         experiment_name_parts.append(suffix)
     
