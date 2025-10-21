@@ -648,7 +648,7 @@ class MMEABaseLearner(BaseLearner):
         # 🔥 Auxiliary outputs 사전 수집 (UnifiedOODDetector Hybrid 모드용)
         def needs_auxiliary_outputs(method_name):
             """Check if method needs auxiliary outputs (auxiliary_logits, confidences)"""
-            return method_name.startswith(('MSP_Hybrid_', 'Energy_Hybrid_', 'MaxLogit_Hybrid_'))
+            return method_name.startswith(('MSP_Hybrid_', 'Energy_Hybrid_', 'MaxLogit_Hybrid_', 'Entropy_Hybrid_', 'ODIN_Hybrid_'))
         
         def needs_fusion_features(method_name):
             """Check if method needs fusion features (LTS, ReAct, Scale, ASH_S)"""
