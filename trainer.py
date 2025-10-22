@@ -39,10 +39,10 @@ def train(args):
         f"mem{args['memory_size']}"
     ]
     
-    # auxiliary_head를 사용하는 경우에만 confidence_method를 경로에 추가
-    if 'auxiliary_head' in fusion_type:
-        confidence_method = args.get('confidence_method', 'energy')
-        experiment_name_parts.append(confidence_method)
+    # 🔥 v2_7+: confidence_method는 경로에 포함하지 않음
+    # 이유: 1:1:1 균등 가중치를 사용하므로 confidence_method가 학습된 가중치에 영향을 주지 않음
+    # 학습 시: 고정된 경로에 저장
+    # 평가 시: 동일한 가중치를 불러와서 confidence_method만 config로 전달
     
     if suffix:
         experiment_name_parts.append(suffix)

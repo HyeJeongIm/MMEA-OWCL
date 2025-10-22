@@ -43,6 +43,9 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
             dropout: 드롭아웃 확률
             num_classes: 클래스 수 (auxiliary head 출력 차원)
             confidence_method: 신뢰도 계산 방법 ("entropy", "max_prob", "energy", "margin", "variance", "doctor")
+                ⚠️  중요: v2_7은 1:1:1 균등 가중치를 사용하므로 confidence_method는 학습에 영향을 주지 않음
+                    - 학습 시: confidence_method와 무관하게 동일한 auxiliary head 학습
+                    - 평가 시: confidence_method만 바꿔서 다양한 신뢰도 기반 OOD 탐지 가능
             aux_loss_weight: Auxiliary loss 가중치 (λ) - 기본값 0.5
             consensus_type: TBN consensus 방법 ('avg', 'identity')
             before_softmax: Softmax 적용 여부
@@ -370,6 +373,10 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
                         confidences[modality_name] = confidence
             
             # 🎯 v2_7: 모든 epoch에서 균등 가중치 사용 (1:1:1)
+            # ⚠️  중요: confidence_tensor는 계산되지만 가중치에는 사용되지 않음
+            #     - 학습 시: 1:1:1 균등 가중치로 auxiliary head 학습
+            #     - 평가 시: confidence는 디버깅/분석 목적으로만 사용
+            #     - OOD 탐지 시: auxiliary_logits와 confidences를 OOD detector에 전달
             if confidences:
                 confidence_tensor = torch.stack(list(confidences.values()), dim=1)
                 

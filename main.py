@@ -60,6 +60,10 @@ def main():
 
     # ------------- 3) argparse 값이 JSON을 덮어씀 (우선순위: JSON < argparse) -------------
     # confidence -> confidence_method로 매핑
+    # ⚠️  중요: confidence_method는 config에만 저장되고 파일 경로에는 포함되지 않음
+    #     - 이유: v2_7+는 1:1:1 균등 가중치를 사용하므로 학습된 가중치가 동일
+    #     - 학습 시: 고정된 경로에 저장 (confidence_method 무관)
+    #     - 평가 시: 동일한 가중치를 불러와서 confidence_method만 config로 전달
     args_dict = vars(args)
     if args_dict.get('confidence') is not None:
         args_dict['confidence_method'] = args_dict.pop('confidence')
