@@ -61,6 +61,27 @@ class TBNDataManager(object):
             raise ValueError("Unknown mode {}.".format(mode))
 
         data, targets = [], []
+        
+        # 🎯 First pass: determine logit dimension from appendent
+        logit_dim = 1  # Default
+        appendent_logits = None
+        appendent_data = None
+        appendent_targets = None
+        
+        if appendent is not None and len(appendent) != 0:
+            if len(appendent) == 2:
+                appendent_data, appendent_targets = appendent
+            elif len(appendent) == 3:
+                appendent_data, appendent_targets, appendent_logits = appendent
+                if len(appendent_logits) > 0:
+                    appendent_logits = np.array(appendent_logits)
+                    if appendent_logits.ndim >= 2:
+                        logit_dim = appendent_logits.shape[1]
+            else:
+                raise ValueError("Unknown appendent length {}.".format(len(appendent)))
+        
+        # 🎯 Build data and prepare logits placeholder
+        logits = []
         for idx in indices:
             if m_rate is None:
                 class_data, class_targets = self._select(
@@ -72,22 +93,55 @@ class TBNDataManager(object):
                 )
             data.append(class_data)
             targets.append(class_targets)
-
+            logits.append(np.full((len(class_targets), logit_dim), -1)) # -1 means no logits
+        
+        # 🎯 Add appendent data if exists
         if appendent is not None and len(appendent) != 0:
-            appendent_data, appendent_targets = appendent
             data.append(appendent_data)
             targets.append(appendent_targets)
+            
+            if appendent_logits is not None:
+                # Ensure appendent_logits is 2D
+                if appendent_logits.ndim == 1:
+                    appendent_logits = appendent_logits.reshape(-1, 1)
+                logits.append(appendent_logits)
+            else:
+                logits.append(np.full((len(appendent_targets), logit_dim), -1))
 
         data, targets = np.concatenate(data), np.concatenate(targets)
-
+        logits = np.concatenate(logits)
+        
+        # 🎯 Check if logits are provided (DER case)
+        has_logits = np.any(logits > -1)
+        
+        # 오류 안 생기게 분기 및 인자 순서/값 일관성 있게 정리
         if ret_data:
-            return data, targets, TBNDummyDataset(data, targets, self.modality,
-                                               trsf, self.new_length, self.image_tmpl,
-                                               self.mpu_path, self.num_segments, mode)
+            if has_logits:
+                dataset = TBNDERDataset(
+                    data, targets, logits, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
+            else:
+                dataset = TBNDummyDataset(
+                    data, targets, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
+            return data, targets, dataset
         else:
-            return TBNDummyDataset(data, targets, self.modality,
-                                trsf, self.new_length, self.image_tmpl,
-                                self.mpu_path, self.num_segments, mode)
+            if has_logits:
+                return TBNDERDataset(
+                    data, targets, logits, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
+            else:
+                return TBNDummyDataset(
+                    data, targets, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
 
     def _setup_data(self, model, modality, arch, train_list, test_list, dataset_name, model_name, shuffle, seed):
         idata = _get_idata(dataset_name, model_name, model, modality, arch, train_list, test_list)
@@ -377,6 +431,21 @@ class TBNDummyDataset(Dataset):
         return len(self.video_list)
     
 
+# 🎯 DER 전용 Dataset - logits를 함께 반환
+class TBNDERDataset(TBNDummyDataset):
+    """DER를 위한 Dataset - old logits를 반환"""
+    def __init__(self, video_list, labels, logits,
+                 modality, trsf, new_length,
+                 image_tmpl, mpu_path=None,
+                 num_segments=3, mode='train'):
+        super().__init__(video_list, labels, modality, trsf, new_length, image_tmpl, mpu_path, num_segments, mode)
+        self.logits = logits
+    
+    def __getitem__(self, index):
+        idx, input, label = super().__getitem__(index)
+        return idx, input, label, self.logits[index]
+    
+
 # TSN DataManager
 class TSNDataManager(object):
     def __init__(self, model, image_tmpl, args):
@@ -425,6 +494,27 @@ class TSNDataManager(object):
             raise ValueError("Unknown mode {}.".format(mode))
 
         data, targets = [], []
+        
+        # 🎯 First pass: determine logit dimension from appendent
+        logit_dim = 1  # Default
+        appendent_logits = None
+        appendent_data = None
+        appendent_targets = None
+        
+        if appendent is not None and len(appendent) != 0:
+            if len(appendent) == 2:
+                appendent_data, appendent_targets = appendent
+            elif len(appendent) == 3:
+                appendent_data, appendent_targets, appendent_logits = appendent
+                if len(appendent_logits) > 0:
+                    appendent_logits = np.array(appendent_logits)
+                    if appendent_logits.ndim >= 2:
+                        logit_dim = appendent_logits.shape[1]
+            else:
+                raise ValueError("Unknown appendent length {}.".format(len(appendent)))
+        
+        # 🎯 Build data and prepare logits placeholder
+        logits = []
         for idx in indices:
             if m_rate is None:
                 class_data, class_targets = self._select(
@@ -436,22 +526,54 @@ class TSNDataManager(object):
                 )
             data.append(class_data)
             targets.append(class_targets)
-
+            logits.append(np.full((len(class_targets), logit_dim), -1))
+        
+        # 🎯 Add appendent data if exists
         if appendent is not None and len(appendent) != 0:
-            appendent_data, appendent_targets = appendent
             data.append(appendent_data)
             targets.append(appendent_targets)
+            
+            if appendent_logits is not None:
+                # Ensure appendent_logits is 2D
+                if appendent_logits.ndim == 1:
+                    appendent_logits = appendent_logits.reshape(-1, 1)
+                logits.append(appendent_logits)
+            else:
+                logits.append(np.full((len(appendent_targets), logit_dim), -1))
 
         data, targets = np.concatenate(data), np.concatenate(targets)
-
+        logits = np.concatenate(logits)
+        
+        # 🎯 Check if logits are provided (DER case)
+        has_logits = np.any(logits > -1)
+        
         if ret_data:
-            return data, targets, TSNDummyDataset(data, targets, self.modality,
-                                               trsf, self.new_length, self.image_tmpl,
-                                               self.mpu_path, self.num_segments, mode)
+            if has_logits:
+                dataset = TSNDERDataset(
+                    data, targets, logits, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
+            else:
+                dataset = TSNDummyDataset(
+                    data, targets, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
+            return data, targets, dataset
         else:
-            return TSNDummyDataset(data, targets, self.modality,
-                                trsf, self.new_length, self.image_tmpl,
-                                self.mpu_path, self.num_segments, mode)
+            if has_logits:
+                return TSNDERDataset(
+                    data, targets, logits, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
+            else:
+                return TSNDummyDataset(
+                    data, targets, self.modality, trsf,
+                    self.new_length, self.image_tmpl, self.mpu_path,
+                    self.num_segments, mode
+                )
 
     def get_finetune_dataset(
             self, indices, source, mode, appendent=None, ret_data=False, m_rate=None
@@ -723,6 +845,22 @@ class TSNDummyDataset(Dataset):
 
     def __len__(self):
         return len(self.video_list)
+
+
+# 🎯 DER 전용 Dataset for TSN - logits를 함께 반환
+class TSNDERDataset(TSNDummyDataset):
+    """DER를 위한 TSN Dataset - old logits를 반환"""
+    
+    def __init__(self, video_list, labels, logits,
+                 modality, trsf, new_length,
+                 image_tmpl, mpu_path=None,
+                 num_segments=3, mode='train'):
+        super().__init__(video_list, labels, modality, trsf, new_length, image_tmpl, mpu_path, num_segments, mode)
+        self.logits = logits
+    
+    def __getitem__(self, index):
+        idx, input, label = super().__getitem__(index)
+        return idx, input, label, self.logits[index]
 
 
 def _map_new_class_index(y, order):

@@ -77,6 +77,7 @@ class DER(Replay):
         if self._cur_task > 0 and hasattr(self, '_data_memory') and self._data_memory.size > 0:
             logging.info("🎯 Storing old predictions for DER...")
             self._store_old_predictions()
+            self._setup_der_train_loaders(data_manager)
 
         self._train(self.train_loader, self.test_loader)
 
@@ -85,6 +86,29 @@ class DER(Replay):
         # 🎯 DataParallel 해제 전 network 모듈 가져오기
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
+    
+    def _setup_der_train_loaders(self, data_manager):
+        """DER 전용 DataLoader 설정 - old logits를 함께 반환"""
+        logging.info(f"Setting up DER train loaders for Task {self._cur_task}")
+        
+        # 🎯 Get memory with logits
+        memory_data = self._get_memory()
+        if memory_data is not None and self._cur_task > 0 and hasattr(self, '_logits_memory') and len(self._logits_memory) > 0:
+            # Memory에 logits 추가
+            appendent = (memory_data[0], memory_data[1], self._logits_memory)
+        else:
+            appendent = memory_data
+        
+        train_dataset = data_manager.get_dataset(
+            np.arange(self._known_classes, self._total_classes),
+            source="train",
+            mode="train",
+            appendent=appendent,
+        )
+        
+        self.train_loader = DataLoader(
+            train_dataset, batch_size=self._batch_size, shuffle=True, num_workers=self._num_workers
+        )
     
     def _store_old_predictions(self):
         """메모리의 샘플들에 대해 현재 모델의 예측값을 저장"""
@@ -95,8 +119,8 @@ class DER(Replay):
             return
         
         memory_dataset = self._data_manager.get_dataset(
-            [], source="train", mode="test", 
-            appendent=(self._data_memory, self._targets_memory)
+            [], source="train", mode="train", 
+            appendent=self._get_memory()
         )
         
         memory_loader = DataLoader(
@@ -153,9 +177,16 @@ class DER(Replay):
             losses, correct, total = 0.0, 0, 0
             der_losses = 0.0  # 🎯 DER loss tracking
             
-            for i, (_, inputs, targets) in enumerate(train_loader):
+            for i, batch in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
+
+                # 🎯 Handle both regular dataset (3 values) and DER dataset (4 values)
+                if len(batch) == 4:
+                    _, inputs, targets, old_logits_batch = batch
+                else:
+                    _, inputs, targets = batch
+                    old_logits_batch = None
 
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
@@ -170,12 +201,20 @@ class DER(Replay):
                 main_loss = loss_info['total_loss']
                 
                 # 🎯 DER Loss 추가 (old logits와의 distillation)
-                if hasattr(self, '_logits_memory') and len(self._logits_memory) > 0:
-                    der_loss = self._compute_der_loss(logits, targets, i)
+                if old_logits_batch is not None:
+                    # Convert old_logits to tensor
+                    old_logits = old_logits_batch.float().to(self._device)
+                        
+                    # 🎯 Filter out rows where ALL elements are -1
+                    # valid_mask: True for rows that have at least one value != -1
+                    der_loss = self._compute_der_loss(logits, targets, old_logits)
+                    
                     total_loss = main_loss + der_loss
                     der_losses += der_loss.item()
+                        
                 else:
                     total_loss = main_loss
+                    der_loss = torch.tensor(0.0, device=self._device)
 
                 for opt in optimizers:
                     opt.zero_grad(set_to_none=True)
@@ -204,7 +243,7 @@ class DER(Replay):
                     "Train/der_loss": avg_der_loss,
                 })
 
-            info = f"Task {self._cur_task}, Epoch {epoch+1}/{self._epochs} => Loss {losses/len(train_loader):.3f}, Train_accy {train_acc:.2f}, DER {avg_der_loss:.3f}"
+            info = f"Task {self._cur_task}, Epoch {epoch+1}/{self._epochs} => Loss {losses/len(train_loader):.3f}, Train_accy {train_acc:.2f}, DER_loss {avg_der_loss:.3f}"
             if self.args.get("log_test_acc", False) and epoch % 5 == 0:
                 test_acc = self._compute_accuracy(self._network, test_loader)
                 info += f", Test_accy {test_acc:.2f}"
@@ -214,41 +253,23 @@ class DER(Replay):
             prog_bar.set_description(info)
 
         logging.info(info)
-    
-    def _compute_der_loss(self, current_logits, targets, batch_idx):
-        """
-        🎯 Dark Experience Replay Loss 계산
         
-        현재 모델의 예측과 저장된 이전 예측 간의 KL divergence
-        메모리와 현재 배치를 매칭하여 계산
+    def _compute_der_loss(self, logits, targets, old_logits):
+        """
+        🎯 DER Loss 계산
         
         Args:
-            current_logits: 현재 모델의 logits [batch_size, num_classes]
+            logits: 현재 모델의 logits [batch_size, num_classes]
             targets: targets [batch_size]
-            batch_idx: 현재 배치 인덱스
-            
-        Returns:
-            der_loss: KL divergence loss
+            old_logits: 이전 모델의 logits [batch_size, num_classes]
         """
-        # 메모리에서 해당하는 샘플들의 이전 logits 가져오기
-        if not hasattr(self, '_logits_memory') or len(self._logits_memory) == 0:
+        valid_mask = (old_logits != -1).any(dim=1)
+        
+        # 🎯 NaN 방지: valid한 샘플이 없으면 0 반환
+        if valid_mask.sum() == 0:
             return torch.tensor(0.0, device=self._device)
         
-        # 현재 배치의 타겟을 기반으로 메모리에서 매칭된 샘플 찾기
-        # 간단한 구현: 임시로 메모리에서 random sampling하여 사용
-        if len(self._logits_memory) >= current_logits.shape[0]:
-            # 메모리에서 샘플링
-            indices = np.random.choice(len(self._logits_memory), size=current_logits.shape[0], replace=False)
-            old_logits_np = self._logits_memory[indices]
-        else:
-            # 메모리가 부족하면 첫 N개만 사용
-            old_logits_np = self._logits_memory[:current_logits.shape[0]]
-        
-        old_logits = torch.from_numpy(old_logits_np).float().to(self._device)
-        
-        der_loss = F.mse_loss(current_logits, old_logits)
-        
-        return self.der_alpha * der_loss
+        return self.der_alpha * F.mse_loss(logits[valid_mask], old_logits[valid_mask])
 
 
 class TBN_DER(DER):
@@ -290,44 +311,28 @@ class DERpp(DER):
         self.der_beta = args.get("der_beta", 0.5)    # DER loss balance parameter
         
         logging.info(f"🎯 DER++ initialized with alpha={self.der_alpha}, beta={self.der_beta}")
-    
-    def _compute_der_loss(self, current_logits, targets, batch_idx):
+        
+    def _compute_der_loss(self, logits, targets, old_logits):
         """
         🎯 DER++ Loss 계산
         
-        DER의 loss + consistency penalty
-        
         Args:
-            current_logits: 현재 모델의 logits [batch_size, num_classes]
+            logits: 현재 모델의 logits [batch_size, num_classes]
             targets: targets [batch_size]
-            batch_idx: 현재 배치 인덱스
-            
-        Returns:
-            der_loss: Combined DER++ loss
+            old_logits: 이전 모델의 logits [batch_size, num_classes]
         """
-        # DER의 기본 loss (logit matching)
-        der_old_loss = super()._compute_der_loss(current_logits, targets, batch_idx)
+        # DER의 기본 loss
+        der_loss = super()._compute_der_loss(logits, targets, old_logits)
         
-        # 🎯 DER++ 추가: Consistency loss with old targets
-        if not hasattr(self, '_targets_memory') or len(self._targets_memory) == 0:
-            return der_old_loss
+        # 🎯 DER++: Consistency loss 추가
+        valid_mask = (old_logits != -1).any(dim=1)
         
-        # Old targets 가져오기
-        if len(self._targets_memory) >= current_logits.shape[0]:
-            indices = np.random.choice(len(self._targets_memory), size=current_logits.shape[0], replace=False)
-            old_targets_np = self._targets_memory[indices]
-        else:
-            old_targets_np = self._targets_memory[:current_logits.shape[0]]
+        if valid_mask.sum() == 0:
+            return der_loss
         
-        old_targets = torch.from_numpy(old_targets_np).long().to(self._device)
+        der_cons_loss = F.cross_entropy(logits[valid_mask], targets[valid_mask])
         
-        # Consistency penalty: Current model이 old targets도 맞추도록
-        der_cons_loss = F.cross_entropy(current_logits, old_targets)
-        
-        # 🎯 Combined DER++ loss
-        der_loss = der_old_loss + self.der_beta * der_cons_loss
-        
-        return der_loss
+        return der_loss + self.der_beta * der_cons_loss
 
 
 class TBN_DERpp(DERpp):
