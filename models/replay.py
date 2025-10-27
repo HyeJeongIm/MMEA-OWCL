@@ -21,6 +21,10 @@ class Replay(MMEABaseLearner):
     def __init__(self, args):
         super().__init__(args)
         self._num_segments = args["num_segments"]
+        
+        # 🎯 Exemplar selection method
+        self._exemplar_selection = args.get("exemplar_selection", "herding")  # "herding" or "reservoir"
+        logging.info(f"🎯 Exemplar selection method: {self._exemplar_selection}")
 
     def after_task(self):
         self._known_classes = self._total_classes
@@ -28,6 +32,24 @@ class Replay(MMEABaseLearner):
         # TSN: save parameters after task completion
         if hasattr(self._network, 'save_parameter'):
             self._network.save_parameter()
+
+    def build_rehearsal_memory(self, data_manager, per_class):
+        """
+        🎯 Reservoir sampling vs Herding 선택 가능한 버전
+        - exemplar_selection 파라미터로 "herding" 또는 "reservoir" 선택
+        """
+        if self._exemplar_selection == "reservoir":
+            # Reservoir Sampling 방식
+            if self._known_classes > 0:
+                self._reduce_exemplar_reservoir(data_manager, per_class)
+            self._construct_exemplar_reservoir(data_manager, per_class)
+        else:
+            # 기본 Herding 방식 (기존 코드)
+            if self._fixed_memory:
+                self._construct_exemplar_unified(data_manager, per_class)
+            else:
+                self._reduce_exemplar(data_manager, per_class)
+                self._construct_exemplar(data_manager, per_class)
     
     def _update_classifier(self, nb_classes):
         """Update classifier based on network type"""
@@ -202,6 +224,84 @@ class Replay(MMEABaseLearner):
             mean = mean / np.linalg.norm(mean)
             
             self._class_means[class_idx, :] = mean
+
+    def _reduce_exemplar_reservoir(self, data_manager, m):
+        """
+        🎯 기존 클래스에 대해 Reservoir Sampling 방식으로 축소
+        - 각 클래스별로 m개를 무작위 선택하여 축소
+        """
+        logging.info(f"🎯 Reducing exemplars with Reservoir Sampling...({m} per class)")
+        
+        # 기존 메모리 백업
+        dummy_data = copy.deepcopy(self._data_memory)
+        dummy_targets = copy.deepcopy(self._targets_memory)
+        
+        # 메모리 초기화
+        self._data_memory, self._targets_memory = np.array([]), np.array([])
+        
+        for class_idx in range(self._known_classes):
+            mask = np.where(dummy_targets == class_idx)[0]
+            class_data = dummy_data[mask]
+            
+            m_current = min(m, len(class_data))
+            if m_current > 0:
+                # Reservoir sampling: uniform random sampling
+                indices = np.random.choice(len(class_data), size=m_current, replace=False)
+                dd = class_data[indices]
+                dt = dummy_targets[mask][indices]
+                
+                self._data_memory = (
+                    np.concatenate((self._data_memory, dd))
+                    if len(self._data_memory) != 0
+                    else dd
+                )
+                self._targets_memory = (
+                    np.concatenate((self._targets_memory, dt))
+                    if len(self._targets_memory) != 0
+                    else dt
+                )
+                
+                logging.info(f"  ✅ Class {class_idx}: {m_current} exemplars selected")
+    
+    def _construct_exemplar_reservoir(self, data_manager, m):
+        """
+        🎯 Reservoir Sampling 방식으로 exemplar 구성
+        - 새 클래스에 대해 m개의 샘플을 무작위로 선택 (uniform 확률)
+        - 클래스 평균 계산에는 사용하지 않음 (NME 없음)
+        """
+        logging.info(f"🎯 Constructing exemplars with Reservoir Sampling...({m} per class)")
+        
+        for class_idx in range(self._known_classes, self._total_classes):
+            data, targets, idx_dataset = data_manager.get_dataset(
+                np.arange(class_idx, class_idx + 1),
+                source="train",
+                mode="test",
+                ret_data=True,
+            )
+            
+            # 🎯 Reservoir Sampling 구현
+            m = min(m, data.shape[0])
+            
+            # 간단한 random sampling (uniform 확률)
+            # 실제 reservoir sampling을 하려면 전체 데이터를 스트림으로 처리해야 함
+            indices = np.random.choice(data.shape[0], size=m, replace=False)
+            selected_exemplars = data[indices]
+            exemplar_targets = np.full(m, class_idx)
+            
+            self._data_memory = (
+                np.concatenate((self._data_memory, selected_exemplars))
+                if len(self._data_memory) != 0
+                else selected_exemplars
+            )
+            self._targets_memory = (
+                np.concatenate((self._targets_memory, exemplar_targets))
+                if len(self._targets_memory) != 0
+                else exemplar_targets
+            )
+            
+            # Reservoir sampling은 class mean을 별도로 계산하지 않음
+            # (NME classifier 사용 안 함)
+            logging.info(f"  ✅ Class {class_idx}: {m} exemplars selected via Reservoir Sampling")
 
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
         """기존 Replay처럼 단순 CrossEntropy만"""

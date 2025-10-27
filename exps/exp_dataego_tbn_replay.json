@@ -2,7 +2,8 @@
     "dataset": "dataego",
     "modality": ["RGB", "Gyro", "Acce"],
     "model_name": "tbn_replay",
-    
+    "exemplar_selection": "reservoir",
+
     "backbone": "tbn",
     "arch": "BNInception",
     "fusion_type": "concat",
@@ -29,13 +30,16 @@
     "increment": 10,
     "shuffle": false,
     
+    "pretrain_epochs": 10,
+    "confidence_method": "energy",
+
     "partialbn": true,
     "freeze": false,
     
     "mode": "train",
     "enable_ood": false,
-    "ood_methods": ["MSP", "ODIN", "Energy", "LTS_Individual", "LTS_Fusion", "LTS_RGB_Only", "LTS_Gyro_Only", "LTS_Acce_Only", "LTS_Late_Fusion"],
-    "weights_path": "null",
+    "ood_methods": ["MSP", "MaxLogit", "Entropy", "Energy", "LTS"],
+    "weights_path": "",
   
     "seed": 1993,
     "device": [0],
@@ -43,4 +47,4 @@
     "log_test_acc": false,
     "use_wandb": true,
     "debug_mode": false
-  }
+}
