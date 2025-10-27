@@ -44,12 +44,11 @@ class DER(Replay):
         
         # 🎯 DER 하이퍼파라미터
         self.der_alpha = args.get("der_alpha", 0.5)  # DER loss weight
-        self.der_beta = args.get("der_beta", 0.5)    # DER loss balance parameter
         
         # 🎯 Logits 메모리 초기화 (old model predictions)
         self._logits_memory = np.array([])
         
-        logging.info(f"🎯 DER initialized with alpha={self.der_alpha}, beta={self.der_beta}")
+        logging.info(f"🎯 DER initialized with alpha={self.der_alpha}")
     
     def incremental_train(self, data_manager):
         """Override incremental_train to store old predictions"""
@@ -173,7 +172,7 @@ class DER(Replay):
                 # 🎯 DER Loss 추가 (old logits와의 distillation)
                 if hasattr(self, '_logits_memory') and len(self._logits_memory) > 0:
                     der_loss = self._compute_der_loss(logits, targets, i)
-                    total_loss = self.der_beta * main_loss + self.der_alpha * der_loss
+                    total_loss = main_loss + der_loss
                     der_losses += der_loss.item()
                 else:
                     total_loss = main_loss
@@ -249,7 +248,7 @@ class DER(Replay):
         
         der_loss = F.mse_loss(current_logits, old_logits)
         
-        return der_loss
+        return self.der_alpha * der_loss
 
 
 class TBN_DER(DER):
@@ -262,6 +261,85 @@ class TBN_DER(DER):
 
 class TSN_DER(DER):
     """DER model for TSN backbone"""
+    
+    def __init__(self, args):
+        super().__init__(args)
+        self._network = TSNBaseline(args)
+
+
+# =====================================================
+# DER++ (Enhanced DER with additional penalties)
+# =====================================================
+
+class DERpp(DER):
+    """
+    🎯 Dark Experience Replay++ (DER++)
+    
+    DER에서 다음을 추가:
+    1. DER의 원래 loss
+    2. Old targets에 대한 additional penalty (consistent predictions)
+    
+    Loss:
+    L = L_current(x, y) + α × L_logits(z', h(x_buffer)) + β × L_cons(z', y_buffer)
+    """
+    
+    def __init__(self, args):
+        super().__init__(args)
+        
+        # DER++는 beta를 사용
+        self.der_beta = args.get("der_beta", 0.5)    # DER loss balance parameter
+        
+        logging.info(f"🎯 DER++ initialized with alpha={self.der_alpha}, beta={self.der_beta}")
+    
+    def _compute_der_loss(self, current_logits, targets, batch_idx):
+        """
+        🎯 DER++ Loss 계산
+        
+        DER의 loss + consistency penalty
+        
+        Args:
+            current_logits: 현재 모델의 logits [batch_size, num_classes]
+            targets: targets [batch_size]
+            batch_idx: 현재 배치 인덱스
+            
+        Returns:
+            der_loss: Combined DER++ loss
+        """
+        # DER의 기본 loss (logit matching)
+        der_old_loss = super()._compute_der_loss(current_logits, targets, batch_idx)
+        
+        # 🎯 DER++ 추가: Consistency loss with old targets
+        if not hasattr(self, '_targets_memory') or len(self._targets_memory) == 0:
+            return der_old_loss
+        
+        # Old targets 가져오기
+        if len(self._targets_memory) >= current_logits.shape[0]:
+            indices = np.random.choice(len(self._targets_memory), size=current_logits.shape[0], replace=False)
+            old_targets_np = self._targets_memory[indices]
+        else:
+            old_targets_np = self._targets_memory[:current_logits.shape[0]]
+        
+        old_targets = torch.from_numpy(old_targets_np).long().to(self._device)
+        
+        # Consistency penalty: Current model이 old targets도 맞추도록
+        der_cons_loss = F.cross_entropy(current_logits, old_targets)
+        
+        # 🎯 Combined DER++ loss
+        der_loss = der_old_loss + self.der_beta * der_cons_loss
+        
+        return der_loss
+
+
+class TBN_DERpp(DERpp):
+    """DER++ model for TBN backbone"""
+    
+    def __init__(self, args):
+        super().__init__(args)
+        self._network = TBNBaseline(args)
+
+
+class TSN_DERpp(DERpp):
+    """DER++ model for TSN backbone"""
     
     def __init__(self, args):
         super().__init__(args)

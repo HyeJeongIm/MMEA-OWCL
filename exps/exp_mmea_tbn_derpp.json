@@ -1,7 +1,7 @@
 {
   "dataset": "mmea",
   "modality": ["RGB", "Gyro", "Acce"],
-  "model_name": "tbn_der",
+  "model_name": "tbn_derpp",
     "exemplar_selection": "reservoir",
   
   "backbone": "tbn",
@@ -58,5 +58,6 @@
     "use_wandb": true,
     "debug_mode": false,
 
-    "der_alpha": 0.5
+    "der_alpha": 0.5,
+    "der_beta": 0.5
 }
