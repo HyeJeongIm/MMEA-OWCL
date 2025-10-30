@@ -18,9 +18,9 @@ from models.baseline_tsn import TSNBaseline
 EPSILON = 1e-8
 
 
-class DER(Replay):
+class MMEADER(Replay):
     """
-    🎯 Dark Experience Replay (DER)
+    🎯 Multimodal Dark Experience Replay (MMEDER)
     
     핵심 아이디어:
     1. 기존 Replay: input + target만 저장하여 재학습
@@ -33,7 +33,7 @@ class DER(Replay):
     - _logits_memory: 이전 모델의 예측 logits (dark knowledge)
     
     Loss:
-    - Current task: CrossEntropy (input, target)
+    - Current task: CrossEntropy (input, target) for each modality
     - Rehearsal: KL Divergence (old_logits, new_logits)
     
     논문: "Dark Experience for General Continual Learning" (arxiv:2004.07211)
@@ -43,12 +43,12 @@ class DER(Replay):
         super().__init__(args)
         
         # 🎯 DER 하이퍼파라미터
-        self.der_alpha = args.get("der_alpha", 0.5)  # DER loss weight
+        self.mmeader_alpha = args.get("mmeader_alpha", 0.5)  # DER loss weight
         
-        # 🎯 Logits 메모리 초기화 (old model predictions)
-        self._logits_memory = np.array([])
+        # 🎯 Auxiliary logits 메모리 (모달리티별 보조 헤드 로짓을 concat하여 저장)
+        self._auxiliary_logits_memory = np.array([])
         
-        logging.info(f"🎯 DER initialized with alpha={self.der_alpha}")
+        logging.info(f"🎯 DER initialized with alpha={self.mmeader_alpha}")
     
     def incremental_train(self, data_manager):
         """Override incremental_train to store old predictions"""
@@ -75,7 +75,7 @@ class DER(Replay):
         
         # 🎯 Store old predictions after network is on GPU
         if self._cur_task > 0 and hasattr(self, '_data_memory') and self._data_memory.size > 0:
-            logging.info("🎯 Storing old predictions for DER...")
+            logging.info("🎯 Storing old auxiliary predictions for MMEADER...")
             self._store_old_predictions()
             self._setup_der_train_loaders(data_manager)
 
@@ -88,7 +88,7 @@ class DER(Replay):
             self._network = self._network.module
     
     def _store_old_predictions(self):
-        """메모리의 샘플들에 대해 현재 모델의 예측값을 저장"""
+        """메모리 샘플들에 대한 현재 모델의 'auxiliary_logits'를 저장 (모달리티 기준 concat)"""
         # 🎯 data_manager를 사용하여 dataset 생성
         prev_start, prev_end = self.class_increments[-2]  # range inclusive
         targets_mem = self._targets_memory
@@ -115,7 +115,7 @@ class DER(Replay):
         # 현재 모델로 예측값 추출
         self._network.to(self._device)
         self._network.eval()
-        old_logits = []
+        old_aux_concat_list = []
         
         with torch.no_grad():
             for _, inputs, _ in memory_loader:
@@ -128,39 +128,69 @@ class DER(Replay):
                 else:
                     outputs = self._network.forward(inputs)
                 
-                # 🎯 Outputs에서 logits 추출
-                if isinstance(outputs, dict) and 'logits' in outputs:
-                    logits = outputs['logits']
-                    np_logits = tensor2numpy(logits).astype(np.float32)
-                    if np_logits.ndim == 1:
-                        np_logits = np_logits.reshape(1, -1)
-                    old_logits.append(np_logits)
+                # 🎯 Outputs에서 auxiliary_logits 추출 후 모달리티 순서대로 concat
+                if isinstance(outputs, dict) and 'auxiliary_logits' in outputs and isinstance(outputs['auxiliary_logits'], dict):
+                    aux_dict = outputs['auxiliary_logits']
+                    np_slices = []
+                    for m in self._modality:
+                        if m in aux_dict and aux_dict[m] is not None:
+                            aux_logits = aux_dict[m]  # Tensor [B, C]
+                            np_aux = tensor2numpy(aux_logits).astype(np.float32)
+                            if np_aux.ndim == 1:
+                                np_aux = np_aux.reshape(1, -1)
+                            np_slices.append(np_aux)
+                        else:
+                            # 해당 모달리티가 없으면 0으로 채우기 (크기 추정 필요 → 다른 모달리티의 C로 대체 불가)
+                            # 안전하게는 현재까지 np_slices가 비어있으면 스킵
+                            pass
+                    if len(np_slices) > 0:
+                        old_aux_concat_list.append(np.concatenate(np_slices, axis=1))
                 else:
                     logging.warning("🎯 No logits found in network output, skipping batch")
                     continue
 
-        old_logits_np = np.concatenate(old_logits, axis=0).astype(np.float32)
-        
-        if len(self._logits_memory) == 0:
-            self._logits_memory = old_logits_np
+        old_aux_concat = np.concatenate(old_aux_concat_list, axis=0).astype(np.float32)
+        num_modalities = len(self._modality)
+        classes_now = old_aux_concat.shape[1] // max(1, num_modalities)
+
+        if len(self._auxiliary_logits_memory) == 0:
+            self._auxiliary_logits_memory = old_aux_concat
         else:
-            logits_memory = np.full((len(targets_mem), self._total_classes), 0, dtype=np.float32) # 0 means no logits for MSE Loss
-            logits_memory[mask_idx_not, :self._known_classes] = self._logits_memory
-            logits_memory[mask_idx, :self._total_classes] = old_logits_np
-            self._logits_memory = logits_memory
-        
-        logging.info(f"🎯 Stored old predictions for {len(self._logits_memory)} exemplars")
-        assert len(self._logits_memory) == len(self._data_memory)
-    
+            # 새 메모리 텐서를 0으로 만들고, 이전 logits는 각 모달리티 슬라이스의 known_classes까지만 복사
+            full_width = num_modalities * self._total_classes
+            logits_memory = np.full((len(targets_mem), full_width), 0, dtype=np.float32)
+
+            prev_width = self._auxiliary_logits_memory.shape[1]
+            prev_classes = prev_width // max(1, num_modalities)
+
+            for mi in range(num_modalities):
+                # 이전 메모리 복사: known_classes까지
+                prev_start = mi * prev_classes
+                prev_end = prev_start + self._known_classes
+                new_start = mi * self._total_classes
+                new_end_known = new_start + self._known_classes
+                logits_memory[mask_idx_not, new_start:new_end_known] = self._auxiliary_logits_memory[:, prev_start:prev_end]
+
+                # 현재 예측 복사: total_classes까지
+                cur_start = mi * classes_now
+                cur_end = cur_start + self._total_classes
+                logits_memory[mask_idx, new_start:cur_end] = old_aux_concat[:, cur_start:cur_end]
+
+            self._auxiliary_logits_memory = logits_memory
+
+        logging.info(f"🎯 Stored old auxiliary predictions for {len(self._auxiliary_logits_memory)} exemplars")
+        assert len(self._auxiliary_logits_memory) == len(self._data_memory)
+
+
     def _setup_der_train_loaders(self, data_manager):
         """DER 전용 DataLoader 설정 - old logits를 함께 반환"""
         logging.info(f"Setting up DER train loaders for Task {self._cur_task}")
         
-        # 🎯 Get memory with logits
+        # 🎯 Get memory with auxiliary logits
         memory_data = self._get_memory()
-        if memory_data is not None and self._cur_task > 0 and hasattr(self, '_logits_memory') and len(self._logits_memory) > 0:
+        if memory_data is not None and self._cur_task > 0 and hasattr(self, '_auxiliary_logits_memory') and len(self._auxiliary_logits_memory) > 0:
             # Memory에 logits 추가
-            appendent = (memory_data[0], memory_data[1], self._logits_memory)
+            appendent = (memory_data[0], memory_data[1], self._auxiliary_logits_memory)
         else:
             appendent = memory_data
         
@@ -185,11 +215,11 @@ class DER(Replay):
         # 기존 메모리 백업
         dummy_data = copy.deepcopy(self._data_memory)
         dummy_targets = copy.deepcopy(self._targets_memory)
-        dummy_logits = copy.deepcopy(self._logits_memory)
+        dummy_logits = copy.deepcopy(self._auxiliary_logits_memory)
         
         # 메모리 초기화
         self._data_memory, self._targets_memory = np.array([]), np.array([])
-        self._logits_memory = np.array([])
+        self._auxiliary_logits_memory = np.array([])
         
         for class_idx in range(self._known_classes):
             mask = np.where(dummy_targets == class_idx)[0]
@@ -214,9 +244,9 @@ class DER(Replay):
                     if len(self._targets_memory) != 0
                     else dt
                 )
-                self._logits_memory = (
-                    np.concatenate((self._logits_memory, dl))
-                    if len(self._logits_memory) != 0
+                self._auxiliary_logits_memory = (
+                    np.concatenate((self._auxiliary_logits_memory, dl))
+                    if len(self._auxiliary_logits_memory) != 0
                     else dl
                 )
                 
@@ -280,7 +310,7 @@ class DER(Replay):
                 self._network.backbone.freeze_fn("bn_statistics")
 
             losses, correct, total = 0.0, 0, 0
-            der_losses = 0.0  # 🎯 DER loss tracking
+            der_losses = 0.0  # 🎯 Auxiliary DER loss tracking
             
             for i, batch in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
@@ -299,7 +329,6 @@ class DER(Replay):
 
                 # 🎯 Forward pass
                 outputs = self._network(inputs, targets=targets)
-                logits = outputs["logits"]
                 
                 # 🎯 Loss 계산 (Standard + DER)
                 loss_info = self._compute_total_loss(outputs, targets)
@@ -308,11 +337,20 @@ class DER(Replay):
                 # 🎯 DER Loss 추가 (old logits와의 distillation)
                 if old_logits_batch is not None:
                     # Convert old_logits to tensor
-                    old_logits = old_logits_batch.float().to(self._device)
-                        
-                    # 🎯 Filter out rows where ALL elements are -1
-                    # valid_mask: True for rows that have at least one value != -1
-                    der_loss = self._compute_der_loss(logits, targets, old_logits)
+                    old_aux_logits = old_logits_batch.float().to(self._device)
+
+                    # 현재 auxiliary logits dict를 모달리티 순서로 concat
+                    aux_dict = outputs.get('auxiliary_logits', {}) if isinstance(outputs, dict) else {}
+                    curr_slices = []
+                    for m in self._modality:
+                        if isinstance(aux_dict, dict) and m in aux_dict and aux_dict[m] is not None:
+                            curr_slices.append(aux_dict[m])
+                    if len(curr_slices) > 0:
+                        current_aux_concat = torch.cat(curr_slices, dim=1)
+                    else:
+                        current_aux_concat = None
+
+                    der_loss = self._compute_aux_der_loss(current_aux_concat, old_aux_logits)
                     
                     total_loss = main_loss + der_loss
                     der_losses += der_loss.item()
@@ -330,7 +368,7 @@ class DER(Replay):
                     opt.step()
 
                 losses += main_loss.item()
-                preds = torch.argmax(logits, dim=1)
+                preds = torch.argmax(outputs["logits"], dim=1)
                 correct += preds.eq(targets).sum().item()
                 total += targets.numel()
 
@@ -345,10 +383,10 @@ class DER(Replay):
                 wandb.log({
                     "Train/train_loss": losses / len(train_loader),
                     "Train/train_accuracy": train_acc,
-                    "Train/der_loss": avg_der_loss,
+                    "Train/aux_der_loss": avg_der_loss,
                 })
 
-            info = f"Task {self._cur_task}, Epoch {epoch+1}/{self._epochs} => Loss {losses/len(train_loader):.3f}, Train_accy {train_acc:.2f}, DER_loss {avg_der_loss:.3f}"
+            info = f"Task {self._cur_task}, Epoch {epoch+1}/{self._epochs} => Loss {losses/len(train_loader):.3f}, Train_accy {train_acc:.2f}, Aux_DER_loss {avg_der_loss:.3f}"
             if self.args.get("log_test_acc", False) and epoch % 5 == 0:
                 test_acc = self._compute_accuracy(self._network, test_loader)
                 info += f", Test_accy {test_acc:.2f}"
@@ -359,39 +397,159 @@ class DER(Replay):
 
         logging.info(info)
         
-    def _compute_der_loss(self, logits, targets, old_logits):
+    def _compute_aux_der_loss(self, current_aux_concat, old_aux_concat):
         """
-        🎯 DER Loss 계산
+        🎯 Auxiliary DER Loss 계산 (모달리티별 auxiliary logits concat 기준)
         
         Args:
-            logits: 현재 모델의 logits [batch_size, num_classes]
-            targets: targets [batch_size]
-            old_logits: 이전 모델의 logits [batch_size, num_classes]
+            current_aux_concat: Tensor [B, M*C]
+            old_aux_concat: Tensor [B, M*C]
         """
-        valid_mask = (old_logits != -1).all(dim=1)
-        
-        # 🎯 NaN 방지: valid한 샘플이 없으면 0 반환
+        if current_aux_concat is None:
+            return torch.tensor(0.0, device=self._device)
+
+        valid_mask = (old_aux_concat != -1).all(dim=1)
         if valid_mask.sum() == 0:
             return torch.tensor(0.0, device=self._device)
-        
-        mask = (old_logits != 0).float()  # old_logits==0 → 0, 나머지 → 1
-        masked_logits = logits * mask
-        
-        return self.der_alpha * F.mse_loss(
-            masked_logits[valid_mask],
-            old_logits[valid_mask]
+
+        mask = (old_aux_concat != 0).float()
+        masked_current = current_aux_concat * mask
+        return self.mmeader_alpha * F.mse_loss(
+            masked_current[valid_mask],
+            old_aux_concat[valid_mask]
         )
-        # Temperature-scaled softmax for knowledge distillation to avoid logit scale mismatch or stabilize the learning process
-        # KL Divergence Loss (Knowledge Distillation)
-        # der_loss = F.kl_div(
-        #     F.log_softmax(masked_logits[valid_mask] / self.der_temp, dim=1),
-        #     F.softmax(old_logits[valid_mask] / self.der_temp, dim=1),
-        #     reduction='batchmean'
-        # )
+        
+    def _collect_class_confidences(self, phase):
+        """
+        Class별 modality confidence를 수집하고 출력
+        
+        Args:
+            phase: 로깅 시점 ("START", "FROZEN", "END", "TEST")
+        
+        Train 시점 (START, FROZEN, END): train_loader 내의 모든 class
+        Test 시점 (TEST): test_loader 내의 모든 class (0 ~ total_classes-1)
+        """
+        # Fusion 모듈이 auxiliary head를 가지고 있는지 확인
+        fusion_module = None
+        if hasattr(self._network, 'fusion'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module is None or not hasattr(fusion_module, 'auxiliary_heads'):
+            logging.info(f"⚠️  No auxiliary heads found - skipping class-wise confidence logging")
+            return
+        
+        # 시점에 따라 적절한 loader 선택
+        if phase == "TEST":
+            loader = self.test_loader
+            loader_desc = "test_loader"
+        else:
+            loader = self.train_loader
+            loader_desc = "train_loader"
+        
+        # Class별로 confidence를 저장할 딕셔너리
+        class_confidences = {}  # {class_id: {modality: [confidences]}}
+        
+        # 네트워크를 eval 모드로 전환 (학습 중이어도 inference만 수행)
+        was_training = self._network.training
+        self._network.eval()
+        
+        logging.info(f"")
+        logging.info(f"{'='*80}")
+        logging.info(f"📊 Collecting Class-wise Modality Confidences ({phase})")
+        logging.info(f"   Task: {self._cur_task}, Epoch: {fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else 'N/A'}")
+        logging.info(f"   Data Source: {loader_desc}")
+        logging.info(f"{'='*80}")
+        
+        with torch.no_grad():
+            for batch in tqdm(loader, desc=f"Collecting confidences ({phase})", leave=False):
+                # 입력을 디바이스로 이동
+                if len(batch) == 4:
+                    _, inputs, targets, old_logits_batch = batch
+                else:
+                    _, inputs, targets = batch
+                    old_logits_batch = None
 
+                for m in self._modality:
+                    inputs[m] = inputs[m].to(self._device)
+                targets = targets.to(self._device)
+                
+                # Forward pass
+                outputs = self._network(inputs)
+                
+                # Confidence 추출
+                if 'confidences' not in outputs or not outputs['confidences']:
+                    continue
+                
+                confidences_dict = outputs['confidences']
+                
+                # 각 샘플에 대해 class별로 confidence 저장 (필터링 없이 모든 class)
+                for i, target in enumerate(targets):
+                    class_id = target.item()
+                    
+                    if class_id not in class_confidences:
+                        class_confidences[class_id] = {mod: [] for mod in self._modality}
+                    
+                    # 각 모달리티의 confidence 저장
+                    for modality in self._modality:
+                        if modality in confidences_dict:
+                            conf_val = confidences_dict[modality][i].item()
+                            class_confidences[class_id][modality].append(conf_val)
+        
+        # 원래 모드로 복원
+        if was_training:
+            self._network.train()
+        
+        # Class별 통계 출력
+        if class_confidences:
+            collected_classes = sorted(class_confidences.keys())
+            num_classes = len(collected_classes)
+            class_range_str = f"{collected_classes[0]}~{collected_classes[-1]}" if num_classes > 1 else f"{collected_classes[0]}"
+            
+            logging.info(f"")
+            logging.info(f"📈 Class-wise Modality Confidence Statistics:")
+            logging.info(f"   Collected {num_classes} classes: {class_range_str}")
+            logging.info(f"{'='*80}")
+            
+            # Class별로 정렬해서 출력
+            for class_id in collected_classes:
+                logging.info(f"  Class {class_id}:")
+                
+                for modality in self._modality:
+                    if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
+                        confs = np.array(class_confidences[class_id][modality])
+                        mean_conf = confs.mean()
+                        std_conf = confs.std()
+                        min_conf = confs.min()
+                        max_conf = confs.max()
+                        count = len(confs)
+                        
+                        logging.info(f"    {modality}: mean={mean_conf:.4f}, std={std_conf:.4f}, "
+                                   f"min={min_conf:.4f}, max={max_conf:.4f}, count={count}")
+            
+            logging.info(f"{'='*80}")
+            
+            # wandb 로깅
+            if self.args.get('use_wandb', False):
+                wandb_log = {}
+                
+                for class_id in class_confidences.keys():
+                    for modality in self._modality:
+                        if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
+                            confs = np.array(class_confidences[class_id][modality])
+                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_mean"] = confs.mean()
+                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_std"] = confs.std()
+                
+                wandb_log[f"ClassConfidence/{phase}_task"] = self._cur_task
+                wandb_log[f"ClassConfidence/{phase}_epoch"] = fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else -1
+                
+                wandb.log(wandb_log)
+                logging.info(f"✅ Logged class-wise confidences to wandb ({phase})")
+        else:
+            logging.info(f"⚠️  No confidence data collected")
 
-
-class TBN_DER(DER):
+class TBN_MMEADER(MMEADER):
     """DER model for TBN backbone"""
     
     def __init__(self, args):
@@ -399,9 +557,11 @@ class TBN_DER(DER):
         self._network = TBNBaseline(args)
 
 
-class TSN_DER(DER):
+class TSN_MMEADER(MMEADER):
     """DER model for TSN backbone"""
     
     def __init__(self, args):
         super().__init__(args)
         self._network = TSNBaseline(args)
+
+ 

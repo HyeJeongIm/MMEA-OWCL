@@ -1,12 +1,12 @@
 {
     "dataset": "dataego",
     "modality": ["RGB", "Gyro", "Acce"],
-    "model_name": "tbn_derpp",
+    "model_name": "tbn_mmeader",
     "exemplar_selection": "reservoir",
     
     "backbone": "tbn",
     "arch": "BNInception",
-    "fusion_type": "concat",
+    "fusion_type": "auxiliary_head_v2_7",
     "consensus_type": "avg",
     "before_softmax": true,
     
@@ -47,8 +47,7 @@
     "log_test_acc": false,
     "use_wandb": true,
     "debug_mode": false,
-    
-    "der_alpha": 0.5,
-    "der_beta": 0.5
+
+    "mmeader_alpha": 0.5
 }
 

@@ -96,6 +96,7 @@ class TBNBaseline(nn.Module):
         
         # 🎯 Auxiliary loss를 최상위로 이동 (학습 루프에서 쉽게 접근 가능)
         if 'auxiliary_loss' in fused:
+            out['auxiliary_logits'] = fused['auxiliary_logits']
             out['auxiliary_loss'] = fused['auxiliary_loss']
             out['aux_loss_weight'] = fused.get('aux_loss_weight', 0.0)
         
