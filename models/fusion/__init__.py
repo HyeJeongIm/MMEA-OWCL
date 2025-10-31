@@ -122,7 +122,6 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             dropout=dropout, 
             num_classes=num_classes or 100,
             confidence_method=confidence_method,  # JSON에서 설정 가능 (기본값: max_prob)
-            aux_loss_weight=aux_loss_weight,
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
