@@ -21,7 +21,7 @@ from .cross_attention_fusion import CrossAttentionFusion
 # from .fusion_multimodal_gating import FusionMultimodalGating
 
 def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, shared_dim=256, num_classes=None, 
-               consensus_type='avg', before_softmax=True, pretrain_epochs=None, confidence_method="max_prob"):
+               consensus_type='avg', before_softmax=True, pretrain_epochs=None, confidence_method="max_prob", aux_loss_weight=0.5):
     if midfusion == "concat":
         return FusionConcat(feature_dim, modality, dropout)
     
@@ -61,6 +61,7 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_3":
@@ -71,7 +72,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             num_classes=num_classes or 100,
             consensus_type=consensus_type,
             before_softmax=before_softmax,
-            num_segments=num_segments or 8
+            num_segments=num_segments or 8,
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_4":
@@ -83,7 +85,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            warmup_epochs=pretrain_epochs if pretrain_epochs is not None else 5  # JSON에서 설정 가능
+            warmup_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능
+            aux_loss_weight=aux_loss_weight,
         )
         
     elif midfusion == "auxiliary_head_v2_5":
@@ -95,7 +98,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            warmup_epochs=pretrain_epochs if pretrain_epochs is not None else 1  # JSON에서 설정 가능 (기본값 1)
+            warmup_epochs=pretrain_epochs if pretrain_epochs is not None else 1,  # JSON에서 설정 가능 (기본값 1)
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_6":
@@ -107,7 +111,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5  # JSON에서 설정 가능 (기본값 5)
+            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능 (기본값 5)
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_7":
@@ -117,10 +122,12 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             dropout=dropout, 
             num_classes=num_classes or 100,
             confidence_method=confidence_method,  # JSON에서 설정 가능 (기본값: max_prob)
+            aux_loss_weight=aux_loss_weight,
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5  # JSON에서 설정 가능 (기본값 5)
+            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능 (기본값 5)
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_8":
@@ -133,7 +140,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5  # JSON에서 설정 가능 (기본값 5)
+            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능 (기본값 5)
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_9":
@@ -146,7 +154,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5  # JSON에서 설정 가능 (기본값 5)
+            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능 (기본값 5)
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "auxiliary_head_v2_10":
@@ -159,7 +168,8 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5  # JSON에서 설정 가능 (기본값 5)
+            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능 (기본값 5)
+            aux_loss_weight=aux_loss_weight,
         )
     
     elif midfusion == "gated_cross_modal":

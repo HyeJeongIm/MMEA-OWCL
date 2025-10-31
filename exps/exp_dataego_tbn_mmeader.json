@@ -30,9 +30,9 @@
     "increment": 5,
     "shuffle": false,
     
-    "pretrain_epochs": 10,
+    "pretrain_epochs": 50,
     "confidence_method": "energy",
-
+    "aux_loss_weight": 0.3,
     "partialbn": true,
     "freeze": false,
     
@@ -48,6 +48,6 @@
     "use_wandb": true,
     "debug_mode": false,
 
-    "mmeader_alpha": 0.5
+    "mmeader_alpha": 0.2
 }
 
