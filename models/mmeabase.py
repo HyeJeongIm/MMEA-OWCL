@@ -585,7 +585,7 @@ class MMEABaseLearner(BaseLearner):
         """Evaluate only OOD detection performance"""
         if not self.enable_ood:
             logging.info("OOD evaluation disabled (enable_ood=False).")
-            return {}, {}
+            return {}, {}, {}
             
         logging.info(f"=== Task {self._cur_task} OOD Evaluation ===")
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
@@ -594,14 +594,14 @@ class MMEABaseLearner(BaseLearner):
         # Check OOD configuration
         if "ood_methods" not in self.args:
             logging.error("ood_methods not found in configuration file!")
-            return {}, {}
+            return {}, {}, {}
                   
         ood_methods = self.args["ood_methods"]
         logging.info(f"OOD Methods: {ood_methods}")
         
         if self.ood_test_loader is None:
             logging.warning("No OOD test data available. Skipping OOD evaluation.")
-            return {}, {}
+            return {}, {}, {}
         
         ood_results = {}
         score_distributions = {}

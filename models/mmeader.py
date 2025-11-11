@@ -1,5 +1,6 @@
 import logging
 import copy
+import os
 
 import numpy as np
 import torch
@@ -551,6 +552,35 @@ class MMEADER(Replay):
                 logging.info(f"✅ Logged class-wise confidences to wandb ({phase})")
         else:
             logging.info(f"⚠️  No confidence data collected")
+    
+    def save_checkpoint(self, weights_dir, filename):
+        """
+        🎯 MMEADER 모델의 체크포인트 저장
+        파라미터 정보(alpha, temp, aux_loss_weight)를 경로에 반영하여 저장
+        """
+        self._network.cpu()
+        save_dict = {
+            "tasks": self._cur_task,
+            "model_state_dict": self._network.state_dict(),
+        }
+        
+        # iCaRL: Save class means for NME evaluation
+        if hasattr(self, '_class_means'):
+            save_dict['class_means'] = self._class_means
+            logging.info(f"💾 Saved class means for {len(self._class_means)} classes")
+        
+        # 🎯 MMEADER 파라미터 정보를 경로에 반영
+        alpha = self.mmeader_alpha
+        temp = self.mmeader_temp
+        aux_weight = self.args.get("aux_loss_weight", 0.5)
+        
+        # 파라미터 정보를 포함한 서브디렉토리 생성
+        param_subdir = f"alpha{alpha}_temp{temp}_aux{aux_weight}"
+        weights_dir = os.path.join(weights_dir, param_subdir)
+        os.makedirs(weights_dir, exist_ok=True)
+        logging.info(f"🎯 MMEADER: Saving to parameter-specific directory: {param_subdir}")
+        
+        torch.save(save_dict, "{}/{}_{}.pkl".format(weights_dir, filename, self._cur_task))
 
 class TBN_MMEADER(MMEADER):
     """DER model for TBN backbone"""
