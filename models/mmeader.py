@@ -44,11 +44,12 @@ class MMEADER(Replay):
         
         # 🎯 DER 하이퍼파라미터
         self.mmeader_alpha = args.get("mmeader_alpha", 0.5)  # DER loss weight
+        self.mmeader_temp = args.get("mmeader_temp", 4.0)     # Temperature for distillation
         
         # 🎯 Auxiliary logits 메모리 (모달리티별 보조 헤드 로짓을 concat하여 저장)
         self._auxiliary_logits_memory = np.array([])
         
-        logging.info(f"🎯 DER initialized with alpha={self.mmeader_alpha}")
+        logging.info(f"🎯 MMEADER initialized with alpha={self.mmeader_alpha}, temperature={self.mmeader_temp}")
     
     def incremental_train(self, data_manager):
         """Override incremental_train to store old predictions"""
@@ -367,7 +368,7 @@ class MMEADER(Replay):
                 for opt in optimizers:
                     opt.step()
 
-                losses += main_loss.item()
+                losses += total_loss.item()
                 preds = torch.argmax(outputs["logits"], dim=1)
                 correct += preds.eq(targets).sum().item()
                 total += targets.numel()
@@ -413,6 +414,8 @@ class MMEADER(Replay):
             return torch.tensor(0.0, device=self._device)
 
         mask = (old_aux_concat != 0).float()
+        old_aux_concat = old_aux_concat / self.mmeader_temp
+        current_aux_concat = current_aux_concat / self.mmeader_temp
         masked_current = current_aux_concat * mask
         return self.mmeader_alpha * F.mse_loss(
             masked_current[valid_mask],
