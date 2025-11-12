@@ -62,26 +62,51 @@ class TBNDataManager(object):
 
         data, targets = [], []
         
-        # 🎯 First pass: determine logit dimension from appendent
-        logit_dim = 1  # Default
+        # 🎯 모달리티별 dict 형태를 유지하여 처리
         appendent_logits = None
         appendent_data = None
         appendent_targets = None
+        is_logits_dict = False  # dict 형태인지 여부
         
         if appendent is not None and len(appendent) != 0:
             if len(appendent) == 2:
                 appendent_data, appendent_targets = appendent
             elif len(appendent) == 3:
                 appendent_data, appendent_targets, appendent_logits = appendent
-                if len(appendent_logits) > 0:
+                # 🎯 모달리티별 dict 형태인지 확인
+                if isinstance(appendent_logits, dict):
+                    is_logits_dict = True
+                elif len(appendent_logits) > 0:
+                    # numpy array 형태 (하위 호환성 - dict로 변환)
                     appendent_logits = np.array(appendent_logits)
+                    # numpy array를 dict로 변환 (모달리티별로 분리)
+                    # 이 경우는 하위 호환성을 위한 것이므로, 모달리티별 클래스 수를 추정해야 함
+                    # 하지만 이 경우는 실제로는 발생하지 않을 것으로 예상됨
+                    logging.warning("⚠️  Received numpy array logits, converting to dict (may lose modality separation)")
+                    # 일단 dict 형태로 변환 (모달리티별로 분리 불가능하므로 첫 번째 모달리티에만 할당)
                     if appendent_logits.ndim >= 2:
-                        logit_dim = appendent_logits.shape[1]
+                        # 전체를 첫 번째 모달리티에 할당 (임시 처리)
+                        appendent_logits = {self.modality[0]: appendent_logits} if len(self.modality) > 0 else {}
+                        is_logits_dict = True
             else:
                 raise ValueError("Unknown appendent length {}.".format(len(appendent)))
         
         # 🎯 Build data and prepare logits placeholder
-        logits = []
+        # dict 형태인 경우 모달리티별로 처리, numpy array인 경우 기존 방식
+        if is_logits_dict:
+            # dict 형태: 모달리티별로 logits 준비
+            logits_dict = {}
+            for m in self.modality:
+                logits_dict[m] = []
+        else:
+            # numpy array 형태 (하위 호환성)
+            logit_dim = 1
+            if appendent_logits is not None and not isinstance(appendent_logits, dict):
+                appendent_logits = np.array(appendent_logits)
+                if appendent_logits.ndim >= 2:
+                    logit_dim = appendent_logits.shape[1]
+            logits = []
+        
         for idx in indices:
             if m_rate is None:
                 class_data, class_targets = self._select(
@@ -93,23 +118,59 @@ class TBNDataManager(object):
                 )
             data.append(class_data)
             targets.append(class_targets)
-            logits.append(np.full((len(class_targets), logit_dim), -1)) # -1 means no logits
+            
+            if is_logits_dict:
+                # dict 형태: 모달리티별로 -1로 채운 placeholder 생성
+                for m in self.modality:
+                    # 각 모달리티의 클래스 수 추정 (appendent_logits에서 가져오거나 기본값)
+                    if appendent_logits is not None and m in appendent_logits and len(appendent_logits[m]) > 0:
+                        num_classes = appendent_logits[m].shape[1]
+                    else:
+                        num_classes = 1  # 기본값
+                    logits_dict[m].append(np.full((len(class_targets), num_classes), -1))
+            else:
+                logits.append(np.full((len(class_targets), logit_dim), -1))
         
         # 🎯 Add appendent data if exists
         if appendent is not None and len(appendent) != 0:
             data.append(appendent_data)
             targets.append(appendent_targets)
             
-            if appendent_logits is not None:
-                logits.append(appendent_logits)
+            if is_logits_dict:
+                # dict 형태: 모달리티별로 추가
+                if appendent_logits is not None:
+                    for m in self.modality:
+                        if m in appendent_logits and len(appendent_logits[m]) > 0:
+                            logits_dict[m].append(appendent_logits[m])
+                        else:
+                            # 해당 모달리티가 없으면 -1로 채운 배열 생성
+                            num_classes = appendent_logits[list(appendent_logits.keys())[0]].shape[1] if appendent_logits else 1
+                            logits_dict[m].append(np.full((len(appendent_targets), num_classes), -1))
+                else:
+                    for m in self.modality:
+                        num_classes = 1
+                        logits_dict[m].append(np.full((len(appendent_targets), num_classes), -1))
             else:
-                logits.append(np.full((len(appendent_targets), logit_dim), -1))
+                if appendent_logits is not None and not isinstance(appendent_logits, dict):
+                    logits.append(appendent_logits)
+                else:
+                    logits.append(np.full((len(appendent_targets), logit_dim), -1))
 
         data, targets = np.concatenate(data), np.concatenate(targets)
-        logits = np.concatenate(logits)
         
         # 🎯 Check if logits are provided (DER case)
-        has_logits = np.any(logits > -1)
+        if is_logits_dict:
+            # dict 형태: 모달리티별로 concat
+            logits = {}
+            for m in self.modality:
+                if len(logits_dict[m]) > 0:
+                    logits[m] = np.concatenate(logits_dict[m], axis=0)
+                else:
+                    logits[m] = np.array([])
+            has_logits = any(len(logits[m]) > 0 and np.any(logits[m] > -1) for m in self.modality if m in logits)
+        else:
+            logits = np.concatenate(logits) if len(logits) > 0 else np.array([])
+            has_logits = len(logits) > 0 and np.any(logits > -1) if isinstance(logits, np.ndarray) else False
         
         # 오류 안 생기게 분기 및 인자 순서/값 일관성 있게 정리
         if ret_data:
@@ -430,17 +491,29 @@ class TBNDummyDataset(Dataset):
 
 # 🎯 DER 전용 Dataset - logits를 함께 반환
 class TBNDERDataset(TBNDummyDataset):
-    """DER를 위한 Dataset - old logits를 반환"""
+    """DER를 위한 Dataset - old logits를 반환 (모달리티별 dict 형태 지원)"""
     def __init__(self, video_list, labels, logits,
                  modality, trsf, new_length,
                  image_tmpl, mpu_path=None,
                  num_segments=3, mode='train'):
         super().__init__(video_list, labels, modality, trsf, new_length, image_tmpl, mpu_path, num_segments, mode)
-        self.logits = logits
+        self.logits = logits  # dict 형태 또는 numpy array 형태
     
     def __getitem__(self, index):
         idx, input, label = super().__getitem__(index)
-        return idx, input, label, self.logits[index]
+        # dict 형태인 경우 모달리티별로 반환, numpy array인 경우 기존 방식
+        if isinstance(self.logits, dict):
+            # dict 형태: 각 모달리티별 logits 반환
+            logits_dict = {}
+            for m in self.modality:
+                if m in self.logits and len(self.logits[m]) > 0:
+                    logits_dict[m] = self.logits[m][index]
+                else:
+                    logits_dict[m] = np.array([])
+            return idx, input, label, logits_dict
+        else:
+            # numpy array 형태 (하위 호환성)
+            return idx, input, label, self.logits[index]
     
 
 # TSN DataManager

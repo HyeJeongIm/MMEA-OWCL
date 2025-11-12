@@ -40,8 +40,7 @@ class Replay(MMEABaseLearner):
         """
         if self._exemplar_selection == "reservoir":
             # Reservoir Sampling 방식
-            if self._known_classes > 0:
-                self._reduce_exemplar_reservoir(data_manager, per_class)
+            self._reduce_exemplar_reservoir(data_manager, per_class)
             self._construct_exemplar_reservoir(data_manager, per_class)
         elif self._exemplar_selection == "herding":
             # 기본 Herding 방식 (기존 코드)
