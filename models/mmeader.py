@@ -79,7 +79,6 @@ class MMEADER(Replay):
         # 🎯 Store old predictions after network is on GPU
         if self._cur_task > 0 and hasattr(self, '_data_memory') and self._data_memory.size > 0:
             logging.info("🎯 Storing old auxiliary predictions for MMEADER...")
-            # self._store_old_predictions()
             self._setup_der_train_loaders(data_manager)
 
         self._train(self.train_loader, self.test_loader)
@@ -89,101 +88,6 @@ class MMEADER(Replay):
         # 🎯 DataParallel 해제 전 network 모듈 가져오기
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
-    
-    def _store_old_predictions(self):
-        """메모리 샘플들에 대한 현재 모델의 'auxiliary_logits'를 저장 (모달리티별 dict 형태)"""
-        # 🎯 data_manager를 사용하여 dataset 생성
-        prev_start, prev_end = self.class_increments[-2]  # range inclusive
-        targets_mem = self._targets_memory
-        mask_idx = np.where((targets_mem >= prev_start) & (targets_mem <= prev_end))[0]
-        mask_idx_not = np.where((targets_mem < prev_start) | (targets_mem > prev_end))[0]
-
-        selected_data = self._data_memory[mask_idx]
-        selected_targets = self._targets_memory[mask_idx]
-
-        memory_dataset = self._data_manager.get_dataset(
-            [],
-            source="train",
-            mode="train",
-            appendent=(selected_data, selected_targets)
-        )
-
-        memory_loader = DataLoader(
-            memory_dataset,
-            batch_size=self._batch_size,
-            shuffle=False,
-            num_workers=self._num_workers
-        )
-        
-        # 현재 모델로 예측값 추출
-        self._network.to(self._device)
-        self._network.eval()
-        old_aux_dict = defaultdict(list)  # {modality: [logits]}
-        
-        with torch.no_grad():
-            for _, inputs, _ in memory_loader:
-                for m in self._modality:
-                    inputs[m] = inputs[m].to(self._device)
-                
-                # 🎯 Forward pass (forward는 dict 반환)
-                if isinstance(self._network, nn.DataParallel):
-                    outputs = self._network.module.forward(inputs)
-                else:
-                    outputs = self._network.forward(inputs)
-                
-                # 🎯 Outputs에서 auxiliary_logits 추출 후 모달리티별로 분리하여 저장
-                if isinstance(outputs, dict) and 'auxiliary_logits' in outputs and isinstance(outputs['auxiliary_logits'], dict):
-                    aux_dict = outputs['auxiliary_logits']
-                    for m in self._modality:
-                        if m in aux_dict and aux_dict[m] is not None:
-                            aux_logits = aux_dict[m]  # Tensor [B, C]
-                            np_aux = tensor2numpy(aux_logits).astype(np.float32)
-                            if np_aux.ndim == 1:
-                                np_aux = np_aux.reshape(1, -1)
-                            old_aux_dict[m].append(np_aux)
-                else:
-                    logging.warning("🎯 No logits found in network output, skipping batch")
-                    continue
-
-        # 모달리티별로 concat
-        old_aux_logits = {}
-        for m in self._modality:
-            if m in old_aux_dict and len(old_aux_dict[m]) > 0:
-                old_aux_logits[m] = np.concatenate(old_aux_dict[m], axis=0).astype(np.float32)
-            else:
-                old_aux_logits[m] = np.array([])
-
-        # 기존 메모리와 병합 (모달리티별로 처리)
-        if isinstance(self._auxiliary_logits_memory, dict):
-            # dict 형태인 경우
-            for m in self._modality:
-                if m in old_aux_logits and len(old_aux_logits[m]) > 0:
-                    # 새 메모리 텐서 생성: [num_samples, total_classes]
-                    num_samples = len(targets_mem)
-                    logits_memory = np.zeros((num_samples, self._total_classes), dtype=np.float32)
-                    
-                    # 이전 메모리에서 known_classes까지 복사
-                    if m in self._auxiliary_logits_memory and len(self._auxiliary_logits_memory[m]) > 0:
-                        prev_logits = self._auxiliary_logits_memory[m]
-                        prev_classes = prev_logits.shape[1]
-                        known_classes_to_copy = min(self._known_classes, prev_classes)
-                        logits_memory[mask_idx_not, :known_classes_to_copy] = prev_logits[mask_idx_not, :known_classes_to_copy]
-                    
-                    # 현재 예측 복사: total_classes까지
-                    cur_logits = old_aux_logits[m]
-                    cur_classes = cur_logits.shape[1]
-                    classes_to_copy = min(self._total_classes, cur_classes)
-                    logits_memory[mask_idx, :classes_to_copy] = cur_logits[:, :classes_to_copy]
-                    
-                    self._auxiliary_logits_memory[m] = logits_memory
-        else:
-            # 기존 numpy array 형태 (하위 호환성 - 사용되지 않음)
-            logging.warning("⚠️  _auxiliary_logits_memory is not dict, converting...")
-            self._auxiliary_logits_memory = old_aux_logits
-
-        num_stored = len(targets_mem)
-        logging.info(f"🎯 Stored old auxiliary predictions for {num_stored} exemplars")
-        assert num_stored == len(self._data_memory)
 
     def _setup_der_train_loaders(self, data_manager):
         """DER 전용 DataLoader 설정 - old logits를 함께 반환
@@ -277,8 +181,22 @@ class MMEADER(Replay):
         🎯 Reservoir Sampling 방식으로 exemplar 구성
         - 새 클래스에 대해 m개의 샘플을 무작위로 선택 (uniform 확률)
         - 클래스 평균 계산에는 사용하지 않음 (NME 없음)
+        - 모달리티별 auxiliary logits도 함께 저장
         """
         logging.info(f"🎯 Constructing exemplars with Reservoir Sampling...({m} per class)")
+        
+        # 기존 메모리가 있으면 모달리티별로 next task dimension에 맞게 padding
+        if self._known_classes > 0:
+            next_logits_dim = self._total_classes + self.args['increment']
+            for mod in self._modality:
+                if mod in self._auxiliary_logits_memory and len(self._auxiliary_logits_memory[mod]) > 0:
+                    cur_logits_dim = self._auxiliary_logits_memory[mod].shape[1]
+                    if cur_logits_dim < next_logits_dim:
+                        self._auxiliary_logits_memory[mod] = np.pad(
+                            self._auxiliary_logits_memory[mod], 
+                            ((0, 0), (0, next_logits_dim - cur_logits_dim)), 
+                            mode='constant', constant_values=0
+                        )
         
         for class_idx in range(self._known_classes, self._total_classes):
             data, targets, idx_dataset = data_manager.get_dataset(
@@ -288,6 +206,12 @@ class MMEADER(Replay):
                 ret_data=True,
             )
             
+            # 🎯 Auxiliary logits 추출
+            idx_loader = DataLoader(
+                idx_dataset, batch_size=self._batch_size, shuffle=False, num_workers=self._num_workers
+            )
+            _, _, auxiliary_logits_dict = self._extract_vectors_and_auxiliary_logits(idx_loader)
+            
             # 🎯 Reservoir Sampling 구현
             m = min(m, data.shape[0])
             
@@ -296,6 +220,30 @@ class MMEADER(Replay):
             indices = np.random.choice(data.shape[0], size=m, replace=False)
             selected_exemplars = data[indices]
             exemplar_targets = np.full(m, class_idx)
+            
+            # 모달리티별로 선택된 exemplar의 auxiliary logits 추출
+            next_logits_dim = self._total_classes + self.args['increment']
+            for mod in self._modality:
+                if mod in auxiliary_logits_dict and len(auxiliary_logits_dict[mod]) > 0:
+                    # 선택된 indices에 해당하는 auxiliary logits 가져오기
+                    exemplar_aux_logits = auxiliary_logits_dict[mod][indices]  # [m, cur_logits_dim]
+                    cur_logits_dim = exemplar_aux_logits.shape[1]
+                    
+                    # next task dimension에 맞게 padding
+                    if cur_logits_dim < next_logits_dim:
+                        exemplar_aux_logits = np.pad(
+                            exemplar_aux_logits, 
+                            ((0, 0), (0, next_logits_dim - cur_logits_dim)),
+                            mode='constant', constant_values=0
+                        )
+                    
+                    # 메모리에 추가
+                    if mod in self._auxiliary_logits_memory and len(self._auxiliary_logits_memory[mod]) > 0:
+                        self._auxiliary_logits_memory[mod] = np.concatenate(
+                            (self._auxiliary_logits_memory[mod], exemplar_aux_logits), axis=0
+                        )
+                    else:
+                        self._auxiliary_logits_memory[mod] = exemplar_aux_logits
             
             self._data_memory = (
                 np.concatenate((self._data_memory, selected_exemplars))
@@ -524,6 +472,117 @@ class MMEADER(Replay):
             
             self._class_means[class_idx, :] = mean
     
+    def _init_train(self, train_loader, test_loader, optimizer, scheduler):
+        """🎯 초기 학습 (Task 0) - main + aux loss"""
+        optimizers = optimizer if isinstance(optimizer, (list, tuple)) else [optimizer]
+        schedulers = scheduler if isinstance(scheduler, (list, tuple)) else [scheduler]
+
+        prog_bar = tqdm(range(self._epochs))
+        for _, epoch in enumerate(prog_bar):
+            self._network.train()
+            
+            # 🎯 Epoch 설정 및 confidence 수집
+            self._setup_epoch_and_collect_confidence(epoch)
+
+            if self._partialbn:
+                self._network.backbone.freeze_fn("partialbn_statistics")
+            if self._freeze:
+                self._network.backbone.freeze_fn("bn_statistics")
+
+            losses, correct, total = 0.0, 0, 0
+            auxiliary_losses = 0.0  # 🎯 Auxiliary loss tracking
+            # 🎯 모달리티별 auxiliary logit accuracy 추적
+            aux_correct = {m: 0 for m in self._modality}
+            aux_total = {m: 0 for m in self._modality}
+            
+            for i, batch in enumerate(train_loader):
+                if self.args["debug_mode"] and i >= 5:
+                    break
+
+                # 🎯 초기 학습에서는 old_logits_batch가 없음
+                _, inputs, targets = batch
+
+                for m in self._modality:
+                    inputs[m] = inputs[m].to(self._device)
+                targets = targets.to(self._device)
+
+                # 🎯 Forward pass
+                outputs = self._network(inputs, targets=targets)
+                
+                # 🎯 Loss 계산 (Standard only)
+                loss_info = self._compute_total_loss(outputs, targets)
+                total_loss = loss_info['total_loss'] # already includes auxiliary loss
+                auxiliary_loss = loss_info['auxiliary_loss'] * loss_info['aux_weight']
+                
+                for opt in optimizers:
+                    opt.zero_grad(set_to_none=True)
+                total_loss.backward()
+                if self._clip_gradient is not None:
+                    nn.utils.clip_grad_norm_(self._network.parameters(), self._clip_gradient)
+                for opt in optimizers:
+                    opt.step()
+
+                losses += total_loss.item()
+                auxiliary_losses += auxiliary_loss.item()
+                # 🎯 Main logits accuracy
+                preds = torch.argmax(outputs["logits"], dim=1)
+                correct += preds.eq(targets).sum().item()
+                total += targets.numel()
+                
+                # 🎯 모달리티별 auxiliary logits accuracy 계산
+                aux_dict = outputs.get('auxiliary_logits', {})
+                if isinstance(aux_dict, dict):
+                    for m in self._modality:
+                        if m in aux_dict and aux_dict[m] is not None:
+                            aux_preds = torch.argmax(aux_dict[m], dim=1)
+                            aux_correct[m] += aux_preds.eq(targets).sum().item()
+                            aux_total[m] += targets.numel()
+
+            for sch in schedulers:
+                sch.step()
+
+            train_acc = round((correct * 100.0) / max(1, total), 2)
+            
+            # 🎯 모달리티별 auxiliary logits accuracy 계산
+            aux_acc_dict = {}
+            for m in self._modality:
+                if aux_total[m] > 0:
+                    aux_acc_dict[m] = round((aux_correct[m] * 100.0) / aux_total[m], 2)
+                else:
+                    aux_acc_dict[m] = 0.0
+
+            # wandb 로깅 (DER loss 제외)
+            wandb_log_dict = {
+                "Train/train_loss": losses / len(train_loader),
+                "Train/aux_loss": auxiliary_losses / len(train_loader),
+                "Train/train_accuracy": train_acc,
+            }
+            # 모달리티별 auxiliary accuracy 추가
+            for m in self._modality:
+                wandb_log_dict[f"Train/aux_acc_{m}"] = aux_acc_dict[m]
+            
+            if self.args["use_wandb"]:
+                wandb.log(wandb_log_dict)
+
+            # info 메시지에 모달리티별 auxiliary accuracy 추가 (DER loss 제외)
+            aux_acc_str = ", ".join([f"Aux_{m}_acc {aux_acc_dict[m]:.2f}" for m in self._modality])
+            info = (
+                f"Task {self._cur_task}, Epoch {epoch+1}/{self._epochs} => "
+                f"Loss {losses/len(train_loader):.3f}, "
+                f"Aux_loss {auxiliary_losses/len(train_loader):.3f}, "
+                f"Train_accy {train_acc:.2f}, "
+                f"{aux_acc_str}"
+            )
+            if self.args.get("log_test_acc", False) and epoch % 5 == 0:
+                test_acc = self._compute_accuracy(self._network, test_loader)
+                info += f", Test_accy {test_acc:.2f}"
+                if self.args["use_wandb"]:
+                    wandb.log({"Train/test_accuracy": test_acc})
+
+            prog_bar.set_description(info)
+
+        logging.info(info)
+
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
         """🎯 DER: Dark Knowledge Distillation 포함"""
         optimizers = optimizer if isinstance(optimizer, (list, tuple)) else [optimizer]
