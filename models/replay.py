@@ -43,14 +43,16 @@ class Replay(MMEABaseLearner):
             if self._known_classes > 0:
                 self._reduce_exemplar_reservoir(data_manager, per_class)
             self._construct_exemplar_reservoir(data_manager, per_class)
-        else:
+        elif self._exemplar_selection == "herding":
             # 기본 Herding 방식 (기존 코드)
             if self._fixed_memory:
                 self._construct_exemplar_unified(data_manager, per_class)
             else:
                 self._reduce_exemplar(data_manager, per_class)
                 self._construct_exemplar(data_manager, per_class)
-    
+        else:
+            raise NotImplementedError(f"Exemplar selection method {self._exemplar_selection} not implemented")
+
     def _update_classifier(self, nb_classes):
         """Update classifier based on network type"""
         if hasattr(self._network, 'update_fc'):

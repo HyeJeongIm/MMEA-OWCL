@@ -294,6 +294,151 @@ class MMEADER(Replay):
             # (NME classifier 사용 안 함)
             logging.info(f"  ✅ Class {class_idx}: {m} exemplars selected via Reservoir Sampling")
     
+    def _reduce_exemplar(self, data_manager, m):
+        """
+        🎯 MMEADER 버전: 기존 클래스 exemplar 축소 (class means 계산 + auxiliary logits 처리)
+        Replay의 _reduce_exemplar를 오버라이드하여 auxiliary logits도 함께 처리
+        """
+        logging.info("Reducing exemplars...({} per classes)".format(m))
+        dummy_data, dummy_targets = copy.deepcopy(self._data_memory), copy.deepcopy(
+            self._targets_memory
+        )
+        dummy_logits = copy.deepcopy(self._auxiliary_logits_memory) if len(self._auxiliary_logits_memory) > 0 else np.array([])
+        
+        self._class_means = np.zeros((self._total_classes, self.feature_dim))
+        self._data_memory, self._targets_memory = np.array([]), np.array([])
+        self._auxiliary_logits_memory = np.array([])
+
+        for class_idx in range(self._known_classes):
+            mask = np.where(dummy_targets == class_idx)[0]
+            dd, dt = dummy_data[mask][:m], dummy_targets[mask][:m]
+            
+            # Auxiliary logits도 함께 축소
+            if len(dummy_logits) > 0:
+                dl = dummy_logits[mask][:m]
+            else:
+                dl = np.array([])
+            
+            self._data_memory = (
+                np.concatenate((self._data_memory, dd))
+                if len(self._data_memory) != 0
+                else dd
+            )
+            self._targets_memory = (
+                np.concatenate((self._targets_memory, dt))
+                if len(self._targets_memory) != 0
+                else dt
+            )
+            
+            # Auxiliary logits 메모리 업데이트
+            if len(dl) > 0:
+                self._auxiliary_logits_memory = (
+                    np.concatenate((self._auxiliary_logits_memory, dl))
+                    if len(self._auxiliary_logits_memory) != 0
+                    else dl
+                )
+
+            # Exemplar mean 계산 (Replay와 동일)
+            idx_dataset = data_manager.get_dataset(
+                [], source="train", mode="test", appendent=(dd, dt)
+            )
+            idx_loader = DataLoader(
+                idx_dataset, batch_size=self._batch_size, shuffle=False, num_workers=self._num_workers
+            )
+            vectors, _ = self._extract_vectors(idx_loader)
+            vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
+            mean = np.mean(vectors, axis=0)
+            mean = mean / np.linalg.norm(mean)
+
+            self._class_means[class_idx, :] = mean
+            
+    def _construct_exemplar(self, data_manager, m):
+        """
+        🎯 MMEADER 버전: 새 클래스 exemplar 구성 (class mean 기반 선택 + auxiliary logits 초기화)
+        Replay의 _construct_exemplar를 오버라이드하여 auxiliary logits도 함께 처리
+        """
+        logging.info("Constructing exemplars...({} per classes)".format(m))
+        for class_idx in range(self._known_classes, self._total_classes):
+            data, targets, idx_dataset = data_manager.get_dataset(
+                np.arange(class_idx, class_idx + 1),
+                source="train",
+                mode="test",
+                ret_data=True,
+            )
+            idx_loader = DataLoader(
+                idx_dataset, batch_size=self._batch_size, shuffle=False, num_workers=self._num_workers
+            )
+            vectors, _ = self._extract_vectors(idx_loader)
+            vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
+            class_mean = np.mean(vectors, axis=0)
+
+            # Select exemplars (Replay와 동일한 방식)
+            selected_exemplars = []
+            exemplar_vectors = []  # [n, feature_dim]
+
+            m = min(m, vectors.shape[0])
+            for k in range(1, m + 1):
+                S = np.sum(
+                    exemplar_vectors, axis=0
+                )  # [feature_dim] sum of selected exemplars vectors
+                mu_p = (vectors + S) / k  # [n, feature_dim] sum to all vectors
+                i = np.argmin(np.sqrt(np.sum((class_mean - mu_p) ** 2, axis=1)))
+                selected_exemplars.append(
+                    data[i]
+                )  # New object to avoid passing by inference
+                exemplar_vectors.append(
+                    vectors[i]
+                )  # New object to avoid passing by inference
+
+                vectors = np.delete(
+                    vectors, i, axis=0
+                )  # Remove it to avoid duplicative selection
+                data = np.delete(
+                    data, i, axis=0
+                )  # Remove it to avoid duplicative selection
+
+            selected_exemplars = np.array(selected_exemplars)
+            exemplar_targets = np.full(m, class_idx)
+            self._data_memory = (
+                np.concatenate((self._data_memory, selected_exemplars))
+                if len(self._data_memory) != 0
+                else selected_exemplars
+            )
+            self._targets_memory = (
+                np.concatenate((self._targets_memory, exemplar_targets))
+                if len(self._targets_memory) != 0
+                else exemplar_targets
+            )
+            
+            # 🎯 새 exemplar에 대한 auxiliary logits는 아직 없으므로 빈 배열로 초기화
+            # 나중에 _store_old_predictions에서 채워질 예정
+            num_modalities = len(self._modality)
+            aux_logits_width = num_modalities * self._total_classes
+            new_aux_logits = np.full((m, aux_logits_width), 0, dtype=np.float32)  # 0으로 초기화 (나중에 채워짐)
+            
+            self._auxiliary_logits_memory = (
+                np.concatenate((self._auxiliary_logits_memory, new_aux_logits))
+                if len(self._auxiliary_logits_memory) != 0
+                else new_aux_logits
+            )
+
+            # Exemplar mean 계산 (Replay와 동일)
+            idx_dataset = data_manager.get_dataset(
+                [],
+                source="train",
+                mode="test",
+                appendent=(selected_exemplars, exemplar_targets),
+            )
+            idx_loader = DataLoader(
+                idx_dataset, batch_size=self._batch_size, shuffle=False, num_workers=self._num_workers
+            )
+            vectors, _ = self._extract_vectors(idx_loader)
+            vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
+            mean = np.mean(vectors, axis=0)
+            mean = mean / np.linalg.norm(mean)
+            
+            self._class_means[class_idx, :] = mean
+    
     def _update_representation(self, train_loader, test_loader, optimizer, scheduler):
         """🎯 DER: Dark Knowledge Distillation 포함"""
         optimizers = optimizer if isinstance(optimizer, (list, tuple)) else [optimizer]
