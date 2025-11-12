@@ -49,7 +49,9 @@ def train(args):
     
     experiment_name = '_'.join(experiment_name_parts)
     
-    experiment_dir = os.path.join(experiment_name, f"seed_{args['seed']}")
+    experiment_dir = os.path.join(experiment_name,
+                                  f"{args['exemplar_selection']}", 
+                                  f"seed_{args['seed']}")
     log_dir = os.path.join("logs", experiment_dir)
     weights_dir = os.path.join(log_dir, "weights")
     results_dir = os.path.join(log_dir, "results")
