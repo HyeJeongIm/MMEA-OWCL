@@ -1016,6 +1016,21 @@ class MMEABaseLearner(BaseLearner):
         # Set total_classnum for OOD evaluation
         self.total_classnum = data_manager.get_total_classnum()
         
+        # 🎯 Reconstruct class_increments for grouped accuracy calculation in eval mode
+        # This is needed because after_task() is not called in eval mode
+        known_classes = 0
+        for i in range(task_id + 1):
+            task_size = data_manager.get_task_size(i)
+            self.class_increments.append([known_classes, known_classes + task_size - 1])
+            known_classes += task_size
+        
+        # Set _known_classes to the classes seen before the current task
+        # For task_id, this is the sum of all previous tasks
+        if task_id > 0:
+            self._known_classes = sum(data_manager.get_task_size(i) for i in range(task_id))
+        else:
+            self._known_classes = 0
+        
         # Update network classifier to match checkpoint size BEFORE loading
         self._update_classifier(self._total_classes)
         
