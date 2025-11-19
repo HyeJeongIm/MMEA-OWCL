@@ -49,9 +49,20 @@ def train(args):
     
     experiment_name = '_'.join(experiment_name_parts)
     
-    experiment_dir = os.path.join(experiment_name,
-                                  f"{args['exemplar_selection']}", 
-                                  f"seed_{args['seed']}")
+    # Determine if exemplar_selection should be included in the directory structure
+    model_name_lower = args['model_name'].lower()
+    exemplar_models = ('replay', 'foster', 'mmeader')
+    if any(name in model_name_lower for name in exemplar_models):
+        exemplar_selection = args.get('exemplar_selection', 'herding')
+    else:
+        exemplar_selection = None  # Don't add empty directory
+
+    experiment_dir_parts = [experiment_name]
+    if exemplar_selection:
+        experiment_dir_parts.append(exemplar_selection)
+    experiment_dir_parts.append(f"seed_{args['seed']}")
+
+    experiment_dir = os.path.join(*experiment_dir_parts)
     log_dir = os.path.join("logs", experiment_dir)
     weights_dir = os.path.join(log_dir, "weights")
     results_dir = os.path.join(log_dir, "results")
