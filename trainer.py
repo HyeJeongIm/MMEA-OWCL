@@ -4,7 +4,8 @@ import logging
 import datetime
 
 from models.model_factory import get_model
-from utils.utils import set_random_seed, set_device
+from utils.utils import set_random_seed
+from utils.allocate_device import get_device
 from dataloader.data_manager import TBNDataManager, TSNDataManager
 
 
@@ -121,7 +122,7 @@ def train(args):
     
     # 랜덤 시드 및 디바이스 설정
     set_random_seed(args["seed"])
-    args["device"] = set_device(args["device"])
+    args["device"] = get_device()
     
     # mode에 따른 실행
     if mode == 'eval':

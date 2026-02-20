@@ -26,8 +26,9 @@ class BaseLearner(object):
         self._memory_size = args["memory_size"]
         self._memory_per_class = args.get("memory_per_class", None)
         self._fixed_memory = args.get("fixed_memory", False)
-        self._device = get_device()
-        self._multiple_gpus = args["device"]
+        self._device = args["device"]
+        # Warning: Don't use multi-gpus
+        self._multiple_gpus = [0]
 
     # 현재 리허설 메모리에 들어있는 총 샘플 수 반환 
     @property
