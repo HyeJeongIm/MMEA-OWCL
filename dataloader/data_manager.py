@@ -527,7 +527,7 @@ class TSNDataManager(object):
 
         self.dataset_name = args['dataset']
         self._setup_data(model._network, args['modality'], args['arch'], args['train_list'], args['test_list'],
-                         args['dataset'], args['shuffle'], args['seed'])
+                         args['dataset'], args['model_name'], args['shuffle'], args['seed'])
         assert args['init_cls'] <= len(self._class_order), "No enough classes."
         self._increments = [args['init_cls']]
         while sum(self._increments) + args['increment'] < len(self._class_order):
@@ -640,8 +640,8 @@ class TSNDataManager(object):
                                 self.mpu_path, self.num_segments, mode)
 
 
-    def _setup_data(self, model, modality, arch, train_list, test_list, dataset_name, shuffle, seed):
-        idata = _get_idata(dataset_name, model, modality, arch, train_list, test_list)
+    def _setup_data(self, model, modality, arch, train_list, test_list, dataset_name, model_name, shuffle, seed):
+        idata = _get_idata(dataset_name, model_name, model, modality, arch, train_list, test_list)
         idata.download_data()
 
         # Data
