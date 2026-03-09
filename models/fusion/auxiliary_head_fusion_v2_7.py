@@ -35,7 +35,7 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
     def __init__(self, feature_dim, modality, dropout, num_classes=32, 
                  confidence_method="max_prob", aux_loss_weight=0.5,
                  consensus_type='avg', before_softmax=True, num_segments=8,
-                 pretrain_epochs=5):
+                 pretrain_epochs=5, energy_norm_method="zscore"):
         """
         Args:
             feature_dim: 각 모달리티 특징 차원 (1024)
@@ -51,6 +51,10 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
             before_softmax: Softmax 적용 여부
             num_segments: TBN segments 수
             pretrain_epochs: Auxiliary head pretrain epoch 수 (기본값: 5)
+            energy_norm_method: Energy confidence 정규화 방법 (기본값: "zscore")
+                - "zscore": Z-score 정규화 (E - E_mean) / E_std → modality 간 scale 차이 제거
+                - "e_uniform": E_uniform 기준 보정 sigmoid(-(E - ln(C)))
+                - "raw": 정규화 없이 raw energy 사용 → sigmoid(-E)
         """
         super().__init__()
         self.modality = modality
@@ -59,6 +63,7 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
         self.num_classes = num_classes
         self.confidence_method = confidence_method
         self.aux_loss_weight = aux_loss_weight
+        self.energy_norm_method = energy_norm_method  # "zscore", "e_uniform", "raw"
         
         # TBN consensus 파라미터
         self.consensus_type = consensus_type
@@ -215,30 +220,40 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
             # 낮은 energy = 높은 confidence
             energy = -torch.logsumexp(logits, dim=1)
 
-            # ── [Step 1.6] Z-score 정규화 우선 적용 ─────────────────────
-            # modality별 학습 분포 기반 정규화 → IMU 구조적 magnitude 차이 제거
-            # confidence = sigmoid(-z)  where z = (E - E_mean) / E_std
-            # - z < 0 (E < E_mean, 확신): conf > 0.5
-            # - z = 0 (E = E_mean, 중립): conf = 0.5
-            # - z > 0 (E > E_mean, 불확실): conf < 0.5
-            stats = self._energy_stats.get(modality_name, None) if modality_name else None
-            if stats is not None:
-                e_mean, e_std = stats
-                z_score = (energy - e_mean) / (e_std + 1e-8)
-                # confidence = torch.sigmoid(-z_score)
-                confidence = -z_score
-                norm_method = "zscore"
-            else:
-                # ── fallback: E_uniform 보정 (Step 1.5) ─────────────────
+            # ── energy_norm_method 에 따른 분기 ─────────────────────────
+            norm_method = self.energy_norm_method   # "zscore" | "e_uniform" | "raw"
+
+            if self.energy_norm_method == "zscore":
+                # [Step 1.6] Z-score 정규화
+                # modality별 학습 분포 기반 정규화 → IMU 구조적 magnitude 차이 제거
+                # confidence = -z  where z = (E - E_mean) / E_std
+                stats = self._energy_stats.get(modality_name, None) if modality_name else None
+                if stats is not None:
+                    e_mean, e_std = stats
+                    z_score = (energy - e_mean) / (e_std + 1e-8)
+                    confidence = -z_score
+                    norm_method = "zscore"
+                else:
+                    # stats 미주입 시 fallback → raw sigmoid
+                    confidence = torch.sigmoid(-energy)
+                    norm_method = "zscore_fallback(raw)"
+
+            elif self.energy_norm_method == "e_uniform":
+                # [Step 1.5] E_uniform 보정: sigmoid(-(E - ln(C)))
                 num_classes_cur = logits.shape[1]
                 energy_uniform = -torch.log(
                     torch.tensor(num_classes_cur, dtype=torch.float32, device=logits.device)
                 )
                 confidence = torch.sigmoid(-(energy - energy_uniform))
                 norm_method = "e_uniform"
+
+            else:
+                # "raw": sigmoid(-E) — 정규화 없음
+                confidence = torch.sigmoid(-energy)
+                norm_method = "raw"
             # ─────────────────────────────────────────────────────────────
 
-            # ─── [α-Diag] modality별 energy 포화 진단 로깅 ──────────────
+            # ─── [α-Diag] modality별 energy 진단 로깅 ──────────────────
             log_key = f'_energy_logged_{modality_name}'
             if not getattr(self, log_key, False):
                 e_np = energy.detach().cpu().numpy()
@@ -259,13 +274,18 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
                         f"min={c_np.min():.4f}, max={c_np.max():.4f}  "
                         f"(E_mean={stats[0]:.3f}, E_std={stats[1]:.3f})"
                     )
-                else:
-                    sigmoid_at_uniform = 0.5
+                elif norm_method == "e_uniform":
                     logging.info(
-                        f"[α-Diag][{modality_name}] conf(e_uniform_fallback):  "
+                        f"[α-Diag][{modality_name}] conf(e_uniform):  "
                         f"mean={c_np.mean():.4f}, std={c_np.std():.4f}, "
                         f"min={c_np.min():.4f}, max={c_np.max():.4f}  "
-                        f"(uniform→{sigmoid_at_uniform:.4f}, sigmoid(-E+lnC))"
+                        f"(sigmoid(-E+lnC))"
+                    )
+                else:
+                    logging.info(
+                        f"[α-Diag][{modality_name}] conf({norm_method}):  "
+                        f"mean={c_np.mean():.4f}, std={c_np.std():.4f}, "
+                        f"min={c_np.min():.4f}, max={c_np.max():.4f}"
                     )
                 pct_below_uniform = (e_np < e_uniform_val).mean() * 100
                 pct_conf_over_half = (c_np > 0.5).mean() * 100

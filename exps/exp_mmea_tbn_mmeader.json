@@ -32,6 +32,7 @@
   
   "pretrain_epochs": 50,
   "confidence_method": "energy",
+  "energy_norm_method": "e_uniform",
   "aux_loss_weight": 0.5,
   "partialbn": true,
   "freeze": false,

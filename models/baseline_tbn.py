@@ -44,7 +44,8 @@ class TBNBaseline(nn.Module):
             before_softmax=self.before_softmax,   # TBN softmax 옵션
             pretrain_epochs=args.get("pretrain_epochs", None),  # Auxiliary head pretrain epochs (JSON에서 설정 가능)
             confidence_method=args.get("confidence_method", "max_prob"),  # Confidence 계산 방법 (JSON에서 설정 가능)
-            aux_loss_weight=args.get("aux_loss_weight", 0.5)  # Auxiliary loss 가중치 (JSON에서 설정 가능)
+            aux_loss_weight=args.get("aux_loss_weight", 0.5),  # Auxiliary loss 가중치 (JSON에서 설정 가능)
+            energy_norm_method=args.get("energy_norm_method", "zscore"),  # Energy 정규화 방법 (JSON에서 설정 가능)
         )
 
         # Set final feature dimension based on modality count
