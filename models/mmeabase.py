@@ -669,6 +669,40 @@ class MMEABaseLearner(BaseLearner):
                 print(f"     - Main logits: ✅")
                 print(f"     - Auxiliary logits: {list(id_auxiliary_outputs.get('auxiliary_logits', {}).keys())}")
                 print(f"     - Confidences: {list(id_auxiliary_outputs.get('confidences', {}).keys())}")
+
+                # ─── [α-Diag] task별 α_m 통계 로깅 + wandb 기록 ────────────
+                confs = id_auxiliary_outputs.get('confidences', {})
+                if confs:
+                    modality_names = list(confs.keys())
+                    conf_stacked = torch.stack(
+                        [confs[m] for m in modality_names], dim=0
+                    )  # [M, N]
+                    alpha = torch.softmax(conf_stacked, dim=0)  # [M, N]
+                    alpha_np = alpha.detach().cpu().numpy()
+
+                    logging.info(f"[α-Diag] Task {self._cur_task} | ID set α_m stats (N={alpha_np.shape[1]}):")
+                    for i, mod in enumerate(modality_names):
+                        a = alpha_np[i]
+                        logging.info(
+                            f"  α_{mod}: mean={a.mean():.4f}, std={a.std():.4f}, "
+                            f"min={a.min():.4f}, max={a.max():.4f}"
+                        )
+                    per_sample_std = alpha_np.std(axis=0)  # [N]
+                    logging.info(
+                        f"  per-sample std: mean={per_sample_std.mean():.4f}, "
+                        f"max={per_sample_std.max():.4f}  "
+                        f"(uniform→0.0, one-hot→{((2/3)**0.5)/3:.4f})"
+                    )
+
+                    if self.args.get('use_wandb', False):
+                        log_dict = {}
+                        for i, mod in enumerate(modality_names):
+                            a = alpha_np[i]
+                            log_dict[f"alpha_diag/{mod}_mean"] = float(a.mean())
+                            log_dict[f"alpha_diag/{mod}_std"]  = float(a.std())
+                        log_dict["alpha_diag/per_sample_std_mean"] = float(per_sample_std.mean())
+                        wandb.log(log_dict, step=self._cur_task)
+                # ──────────────────────────────────────────────────────────────
             else:
                 print(f"  ❌ ERROR: Auxiliary outputs not available!")
                 print(f"     Hybrid methods require auxiliary head fusion, but model doesn't provide auxiliary outputs.")
@@ -968,6 +1002,63 @@ class MMEABaseLearner(BaseLearner):
         
         return ood_results, score_distributions, ood_methods_metrics
     
+    def _compute_energy_stats_from_loader(self, loader):
+        """
+        [Step 1.6] train_loader (또는 memory loader)의 forward pass로
+        modality별 energy mean / std를 계산하여 fusion 모듈에 주입한다.
+
+        - E_m(x) = -logsumexp(auxiliary_logits_m)
+        - 결과를 fusion.set_energy_stats({mod: (mean, std), ...})로 전달
+        """
+        fusion = getattr(self._network, 'fusion', None)
+        if fusion is None:
+            fusion = getattr(self._network, 'fusion_network', None)
+        if fusion is None or not hasattr(fusion, 'auxiliary_heads'):
+            logging.info("[EnergyStats] No auxiliary heads – skipping energy stats computation")
+            return
+
+        logging.info("[EnergyStats] Computing modality-wise energy statistics from loader ...")
+        self._network.eval()
+
+        energy_accum = {mod: [] for mod in self._modality}
+
+        with torch.no_grad():
+            for i, (_, inputs, _) in enumerate(
+                tqdm(loader, desc="EnergyStats forward", leave=False)
+            ):
+                if self.args.get("debug_mode") and i >= 10:
+                    break
+                if isinstance(inputs, dict):
+                    for m in inputs:
+                        inputs[m] = inputs[m].to(self._device)
+                else:
+                    inputs = inputs.to(self._device)
+
+                outputs = self._network(inputs)
+                aux_logits = outputs.get('auxiliary_logits', {})
+                for mod, logits in aux_logits.items():
+                    energy = -torch.logsumexp(logits, dim=1)  # [B]
+                    energy_accum[mod].append(energy.cpu())
+
+        energy_stats = {}
+        for mod, tensors in energy_accum.items():
+            if not tensors:
+                continue
+            all_e = torch.cat(tensors, dim=0)  # [N]
+            e_mean = all_e.mean().item()
+            e_std  = all_e.std().item()
+            energy_stats[mod] = (e_mean, e_std)
+            logging.info(
+                f"[EnergyStats] {mod}: mean={e_mean:.4f}, std={e_std:.4f}  "
+                f"(N={all_e.numel()})"
+            )
+
+        if energy_stats:
+            fusion.set_energy_stats(energy_stats)
+            logging.info("[EnergyStats] ✅ Energy stats injected into fusion module")
+        else:
+            logging.warning("[EnergyStats] ⚠️  No auxiliary logits found – stats not set")
+
     def load_checkpoint(self, checkpoint_path):
         """Load model from checkpoint for inference"""
         if not os.path.exists(checkpoint_path):
@@ -1037,6 +1128,13 @@ class MMEABaseLearner(BaseLearner):
         # Load checkpoint with correct classifier size
         self.load_checkpoint(checkpoint_path)
         
+        # ─── [α-Diag] task별 energy 로깅 플래그 리셋 ──────────────────
+        fusion = getattr(self._network, 'fusion', None)
+        if fusion is not None:
+            for mod in ['RGB', 'Gyro', 'Acce']:
+                setattr(fusion, f'_energy_logged_{mod}', False)
+        # ────────────────────────────────────────────────────────────────
+        
         # Ensure model is on correct device
         self._network = self._network.to(self._device)
         
@@ -1049,6 +1147,12 @@ class MMEABaseLearner(BaseLearner):
         else:
             logging.error("❌ test_loader is not set properly!")
             raise AttributeError("test_loader was not set up correctly")
+        
+        # ── [Step 1.6] Modality별 energy 통계 계산 (Z-score 정규화용) ──
+        # train_loader를 활용해 modality별 energy mean/std를 계산하고
+        # fusion 모듈에 주입 → _compute_confidence()에서 Z-score 사용
+        self._compute_energy_stats_from_loader(self.train_loader)
+        # ────────────────────────────────────────────────────────────────
         
         # Perform evaluation
         if self.enable_ood:

@@ -412,10 +412,35 @@ class UnifiedOODDetector(BaseOODDetector):
             # Stack: [num_modalities, batch, num_classes]
             aux_logits_stacked = torch.stack(aux_logits_list, dim=0)
             
-            # Softmax로 confidence 정규화 (dim=0: 모달리티 차원에서 합=1)
-            normalized_weights = torch.softmax(conf_stacked, dim=0)  # [num_modalities, batch]
-            
-            # 가중합 계산
+        # Softmax로 confidence 정규화 (dim=0: 모달리티 차원에서 합=1)
+        normalized_weights = torch.softmax(conf_stacked, dim=0)  # [num_modalities, batch]
+
+        # ─── [α-Diag] modality weight 분포 진단 로깅 ────────────────────
+        # 전체 실행 중 1회만 출력 (배치마다 반복 방지)
+        if not getattr(self, '_alpha_logged', False):
+            w_np = normalized_weights.detach().cpu().numpy()  # [M, B]
+            modality_names = ['RGB', 'Gyro', 'Acce']
+            logging.info("=" * 60)
+            logging.info("[α-Diag] Modality Weight (α_m) Distribution")
+            logging.info(f"  shape: {w_np.shape}  (modalities x batch)")
+            for i, mod in enumerate(modality_names[:w_np.shape[0]]):
+                w_i = w_np[i]
+                logging.info(
+                    f"  α_{mod}: mean={w_i.mean():.4f}, std={w_i.std():.4f}, "
+                    f"min={w_i.min():.4f}, max={w_i.max():.4f}"
+                )
+            per_sample_std = w_np.std(axis=0)  # [B]: 샘플별 3 modality weight의 std
+            logging.info(
+                f"  per-sample std(α_RGB,α_Gyro,α_Acce): "
+                f"mean={per_sample_std.mean():.4f}, max={per_sample_std.max():.4f}"
+            )
+            logging.info(
+                f"  → uniform 기준: std≈0.0000  |  "
+                f"완전 one-hot 기준: std≈{((2/3)**0.5)/3:.4f}"
+            )
+            logging.info("=" * 60)
+            self._alpha_logged = True
+        # ──────────────────────────────────────────────────────────────────            # 가중합 계산
             for i in range(len(aux_logits_list)):
                 weighted_logits = aux_logits_stacked[i] * normalized_weights[i].unsqueeze(-1)
                 fused_logits = fused_logits + weighted_logits

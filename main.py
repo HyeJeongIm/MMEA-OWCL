@@ -74,7 +74,8 @@ def main():
         # 이미 list 형태이므로 그대로 사용
         pass
     
-    config.update(args_dict)
+    # None 값은 JSON 설정을 덮어쓰지 않도록 제외
+    config.update({k: v for k, v in args_dict.items() if v is not None})
 
     # ------------- 4) 런 메타 정보 주입 (run_id/시간/호스트/GPU/W&B사용여부) -------------
     config['run_id'] = str(uuid.uuid4()).split('-')[0]

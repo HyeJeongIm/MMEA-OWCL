@@ -983,7 +983,7 @@ class MMEADER(Replay):
         
         # 🎯 MMEADER 파라미터 정보를 경로에 반영
         alpha = self.mmeader_alpha
-        temp = self.mmeader_temp
+        temp = int(self.mmeader_temp)
         aux_weight = self.args.get("aux_loss_weight", 0.5)
         
         # 파라미터 정보를 포함한 서브디렉토리 생성

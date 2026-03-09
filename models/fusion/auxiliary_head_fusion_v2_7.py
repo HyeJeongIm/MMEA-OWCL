@@ -98,12 +98,30 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
         self.first_forward_per_task = {}
         self.epoch_logged = set()  # 이미 로깅된 epoch 추적 (중복 방지)
         
+        # ── [Step 1.6] Modality별 energy 통계 (Z-score 정규화용) ────────
+        # {modality_name: (mean: float, std: float)} 형태로 저장
+        # mmeabase의 _compute_energy_stats_from_loader() 에서 채워짐
+        self._energy_stats = {}  # e.g. {'RGB': (-1.5, 1.2), 'Gyro': (-5.8, 0.7)}
+        
         # TBN consensus
         self.consensus = ConsensusModule(consensus_type)
         
         # Optional softmax
         if not self.before_softmax:
             self.softmax = nn.Softmax(dim=1)
+
+    def set_energy_stats(self, energy_stats: dict):
+        """
+        Modality별 energy 통계를 주입 (Z-score 정규화에 사용).
+
+        Args:
+            energy_stats: {modality_name: (mean: float, std: float)}
+                          e.g. {'RGB': (-1.5, 1.2), 'Gyro': (-5.8, 0.7), 'Acce': (-5.7, 0.6)}
+        """
+        self._energy_stats = energy_stats
+        logging.info(f"[EnergyStats] Injected modality-wise energy statistics:")
+        for mod, (mean, std) in energy_stats.items():
+            logging.info(f"  {mod}: mean={mean:.4f}, std={std:.4f}")
 
     def set_epoch(self, epoch):
         """
@@ -161,7 +179,7 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
         # 모든 task에서 처음 5 epoch은 pretrain 적용
         return self.current_epoch < self.pretrain_epochs
 
-    def _compute_confidence(self, logits):
+    def _compute_confidence(self, logits, modality_name=None):
         """
         Auxiliary head 예측 결과로부터 신뢰도 계산
         
@@ -195,11 +213,70 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
         elif self.confidence_method == "energy":
             # Energy score: E(x) = -log(sum(exp(logits)))
             # 낮은 energy = 높은 confidence
-            # Temperature scaling 없이 사용 (T=1)
             energy = -torch.logsumexp(logits, dim=1)
-            # Normalize to [0, 1] range using sigmoid-like transformation
-            # energy가 낮을수록 confidence 높음
-            confidence = torch.sigmoid(-energy)
+
+            # ── [Step 1.6] Z-score 정규화 우선 적용 ─────────────────────
+            # modality별 학습 분포 기반 정규화 → IMU 구조적 magnitude 차이 제거
+            # confidence = sigmoid(-z)  where z = (E - E_mean) / E_std
+            # - z < 0 (E < E_mean, 확신): conf > 0.5
+            # - z = 0 (E = E_mean, 중립): conf = 0.5
+            # - z > 0 (E > E_mean, 불확실): conf < 0.5
+            stats = self._energy_stats.get(modality_name, None) if modality_name else None
+            if stats is not None:
+                e_mean, e_std = stats
+                z_score = (energy - e_mean) / (e_std + 1e-8)
+                # confidence = torch.sigmoid(-z_score)
+                confidence = -z_score
+                norm_method = "zscore"
+            else:
+                # ── fallback: E_uniform 보정 (Step 1.5) ─────────────────
+                num_classes_cur = logits.shape[1]
+                energy_uniform = -torch.log(
+                    torch.tensor(num_classes_cur, dtype=torch.float32, device=logits.device)
+                )
+                confidence = torch.sigmoid(-(energy - energy_uniform))
+                norm_method = "e_uniform"
+            # ─────────────────────────────────────────────────────────────
+
+            # ─── [α-Diag] modality별 energy 포화 진단 로깅 ──────────────
+            log_key = f'_energy_logged_{modality_name}'
+            if not getattr(self, log_key, False):
+                e_np = energy.detach().cpu().numpy()
+                c_np = confidence.detach().cpu().numpy()
+                num_classes = logits.shape[1]
+                import numpy as np
+                e_uniform_val = -np.log(num_classes)
+                logging.info(
+                    f"[α-Diag][{modality_name}] energy(raw):  "
+                    f"mean={e_np.mean():.3f}, std={e_np.std():.3f}, "
+                    f"min={e_np.min():.3f}, max={e_np.max():.3f}  "
+                    f"(C={num_classes}, E_uniform={e_uniform_val:.3f})"
+                )
+                if norm_method == "zscore":
+                    logging.info(
+                        f"[α-Diag][{modality_name}] conf(zscore):  "
+                        f"mean={c_np.mean():.4f}, std={c_np.std():.4f}, "
+                        f"min={c_np.min():.4f}, max={c_np.max():.4f}  "
+                        f"(E_mean={stats[0]:.3f}, E_std={stats[1]:.3f})"
+                    )
+                else:
+                    sigmoid_at_uniform = 0.5
+                    logging.info(
+                        f"[α-Diag][{modality_name}] conf(e_uniform_fallback):  "
+                        f"mean={c_np.mean():.4f}, std={c_np.std():.4f}, "
+                        f"min={c_np.min():.4f}, max={c_np.max():.4f}  "
+                        f"(uniform→{sigmoid_at_uniform:.4f}, sigmoid(-E+lnC))"
+                    )
+                pct_below_uniform = (e_np < e_uniform_val).mean() * 100
+                pct_conf_over_half = (c_np > 0.5).mean() * 100
+                logging.info(
+                    f"[α-Diag][{modality_name}] 보정 진단:  "
+                    f"E < E_uniform = {pct_below_uniform:.1f}%  |  "
+                    f"conf > 0.5 = {pct_conf_over_half:.1f}%  "
+                    f"[norm={norm_method}]"
+                )
+                setattr(self, log_key, True)
+            # ─────────────────────────────────────────────────────────────
             
         elif self.confidence_method == "margin":
             # Margin: Top-1과 Top-2 확률의 차이
@@ -233,6 +310,10 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
         # 🔥 모든 task에서 pretrain 적용: epoch 리셋 + auxiliary heads unfreeze
         self.current_epoch = 0  # 각 task 시작 시 epoch 리셋
         self.auxiliary_heads_frozen = False  # Unfrozen 상태로 시작
+        self._energy_logged = False  # task별 energy 진단 로깅 리셋 (legacy)
+        # modality별 로깅 플래그 리셋
+        for mod in getattr(self, 'modality', ['RGB', 'Gyro', 'Acce']):
+            setattr(self, f'_energy_logged_{mod}', False)
         
         # Auxiliary heads unfreeze (모든 task 시작 시)
         for modality_name, head in self.auxiliary_heads.items():
@@ -357,7 +438,7 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
                         if feature is not None and modality_name in self.auxiliary_heads:
                             aux_logits_segments = self.auxiliary_heads[modality_name](feature)
                             aux_logits = self._apply_consensus_to_logits(aux_logits_segments)
-                            confidence = self._compute_confidence(aux_logits)
+                            confidence = self._compute_confidence(aux_logits, modality_name=modality_name)
                             
                             auxiliary_logits[modality_name] = aux_logits
                             confidences[modality_name] = confidence
@@ -367,7 +448,7 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
                     if feature is not None and modality_name in self.auxiliary_heads:
                         aux_logits_segments = self.auxiliary_heads[modality_name](feature)
                         aux_logits = self._apply_consensus_to_logits(aux_logits_segments)
-                        confidence = self._compute_confidence(aux_logits)
+                        confidence = self._compute_confidence(aux_logits, modality_name=modality_name)
                         
                         auxiliary_logits[modality_name] = aux_logits
                         confidences[modality_name] = confidence

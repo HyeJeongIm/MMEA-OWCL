@@ -265,7 +265,7 @@ def _get_checkpoint_path(weights_dir, model, args, task_id):
     if hasattr(model, 'mmeader_alpha') and hasattr(model, 'mmeader_temp'):
         # MMEADER 파라미터 정보 가져오기
         alpha = model.mmeader_alpha
-        temp = model.mmeader_temp
+        temp = int(model.mmeader_temp)
         aux_weight = args.get("aux_loss_weight", 0.5)
         
         # 파라미터별 서브디렉토리 경로 생성
