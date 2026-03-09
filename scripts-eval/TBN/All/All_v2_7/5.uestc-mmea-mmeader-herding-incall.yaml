@@ -1,0 +1,95 @@
+# ===========================
+# TBN-MMEADER Herding-Optimized-Hyps (alpha-temp-aux)
+# ===========================
+name: 'Evaluate TBN-MMEADER-Herding-Optimized-Hyps (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
+project: 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
+entity: 'mmea-owcl'
+
+method: grid # or random, bayes
+metric:
+  goal: maximize
+  name: Task/avg_acc
+program: main.py
+
+parameters:
+  dataset:
+    values: ['mmea']
+  train_list:
+    values: ['mydataset_total_train.txt']
+  model_name:
+    values: ['tbn_mmeader']
+  workers:
+    values: [4]
+  epochs:
+    values: [50]
+  # ---------------------------
+  # Incremental Learning Config
+  # ---------------------------
+  exemplar_selection:
+    values: ['herding']
+  modality: 
+    values: [['RGB', 'Gyro', 'Acce']]
+  fusion_type:
+    values: ['auxiliary_head_v2_7']
+  pretrain_epochs:
+    values: [50]
+  confidence_method:
+    values: ['energy']
+  mode:
+    values: ['eval']
+  increment:
+    values: [8, 4, 2]
+  enable_ood:
+    values: [true]
+  weights_path:
+    values: [null]
+
+  ood_methods:
+    values: [[
+      # ========================================
+      # Logit-based OOD Methods (Baseline)
+      # ========================================
+      "MSP_Baseline",
+      "MaxLogit_Baseline",
+      "Energy_Baseline",
+      "Entropy_Baseline",
+      
+      # ========================================
+      # Logit-based Hybrid - NoWeight
+      # (Main + Aux logits, 균등 가중치)
+      # ========================================
+      "MSP_Hybrid_NoWeight",
+      "MaxLogit_Hybrid_NoWeight",
+      "Energy_Hybrid_NoWeight",
+      "Entropy_Hybrid_NoWeight",
+      
+      # ========================================
+      # Logit-based Hybrid - ConfRaw
+      # (Main + Aux logits, raw confidence 가중)
+      # ========================================
+      "MSP_Hybrid_ConfRaw",
+      "MaxLogit_Hybrid_ConfRaw",
+      "Energy_Hybrid_ConfRaw",
+      "Entropy_Hybrid_ConfRaw",
+      
+      # ========================================
+      # Logit-based Hybrid - ConfNormalized
+      # (Main + Aux logits, normalized confidence 가중)
+      # ========================================
+      "MSP_Hybrid_ConfNormalized",
+      "MaxLogit_Hybrid_ConfNormalized",
+      "Energy_Hybrid_ConfNormalized",
+      "Entropy_Hybrid_ConfNormalized",
+    ]]
+  seed:
+    values: [1993, 1994, 1995, 1996, 1997]
+
+  # ---------------------------
+  # 🔹 Reduced Hyperparameters to Sweep
+  # ---------------------------
+  mmeader_alpha:
+    values: [0.3]       # DER weight
+  mmeader_temp:
+    values: [6]                # Distillation temperature
+  aux_loss_weight:
+    values: [0.5]       # Auxiliary loss weight
