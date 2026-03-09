@@ -1001,14 +1001,20 @@ class MMEABaseLearner(BaseLearner):
         }
         
         return ood_results, score_distributions, ood_methods_metrics
-    
-    def _compute_energy_stats_from_loader(self, loader):
-        """
-        [Step 1.6] train_loader (또는 memory loader)의 forward pass로
-        modality별 energy mean / std를 계산하여 fusion 모듈에 주입한다.
 
-        - E_m(x) = -logsumexp(auxiliary_logits_m)
-        - 결과를 fusion.set_energy_stats({mod: (mean, std), ...})로 전달
+    def _compute_energy_stats_from_memory(self, data_manager):
+        """
+        [Step 1.6 수정] Memory buffer 데이터 기반으로 modality별 energy mean/std 계산.
+
+        수정 이유:
+          (1) Train set 데이터는 현재 task에 편향되어 있어 energy 분포 추정에 부적합할 수 있음.
+          (2) memory buffer는 prev/current task 데이터가 균형적으로 포함되어 있어
+              energy 분포 추정에 더 적합함.
+          (3) inference_mode_evaluation에서 memory가 구성되어 있지 않으므로
+              build_rehearsal_memory 호출하여 memory를 구성함.
+          
+        Test: (1) memory 없음 → E_uniform fallback 사용 (stats 미주입)
+              (2) memory 있음 → memory 기반 energy stats 사용
         """
         fusion = getattr(self._network, 'fusion', None)
         if fusion is None:
@@ -1017,14 +1023,36 @@ class MMEABaseLearner(BaseLearner):
             logging.info("[EnergyStats] No auxiliary heads – skipping energy stats computation")
             return
 
-        logging.info("[EnergyStats] Computing modality-wise energy statistics from loader ...")
-        self._network.eval()
+        memory = self._get_memory()  # None if empty
+        if memory is None:
+            logging.info("[EnergyStats] No memory buffer (Task 0 or empty) – E_uniform fallback will be used")
+            return  # fusion._energy_stats = {} → _compute_confidence()가 E_uniform fallback 사용
 
+        data_mem, targets_mem = memory
+        logging.info(f"[EnergyStats] Computing energy stats from memory buffer ({len(data_mem)} samples) ...")
+
+        mem_dataset = data_manager.get_dataset(
+            [], source="train", mode="test",
+            appendent=(data_mem, targets_mem)
+        )
+        mem_loader = DataLoader(
+            mem_dataset,
+            batch_size=self._batch_size,
+            shuffle=False,
+            num_workers=self._num_workers,
+        )
+
+        self._network.eval()
         energy_accum = {mod: [] for mod in self._modality}
+
+        # stats 계산 forward pass 중에는 [α-Diag] 로깅 플래그를 비활성화
+        # → 플래그가 소진되지 않아 실제 평가 시 norm=zscore 로그가 정상 출력됨
+        for mod_name in ['RGB', 'Gyro', 'Acce']:
+            setattr(fusion, f'_energy_logged_{mod_name}', True)  # suppress during stats computation
 
         with torch.no_grad():
             for i, (_, inputs, _) in enumerate(
-                tqdm(loader, desc="EnergyStats forward", leave=False)
+                tqdm(mem_loader, desc="EnergyStats(memory) forward", leave=False)
             ):
                 if self.args.get("debug_mode") and i >= 10:
                     break
@@ -1055,7 +1083,10 @@ class MMEABaseLearner(BaseLearner):
 
         if energy_stats:
             fusion.set_energy_stats(energy_stats)
-            logging.info("[EnergyStats] ✅ Energy stats injected into fusion module")
+            logging.info("[EnergyStats] ✅ Memory-based energy stats injected into fusion module")
+            # stats 주입 후 플래그 리셋 → 실제 평가 시 norm=zscore 로그 출력
+            for mod_name in ['RGB', 'Gyro', 'Acce']:
+                setattr(fusion, f'_energy_logged_{mod_name}', False)
         else:
             logging.warning("[EnergyStats] ⚠️  No auxiliary logits found – stats not set")
 
@@ -1063,29 +1094,41 @@ class MMEABaseLearner(BaseLearner):
         """Load model from checkpoint for inference"""
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        
+
         logging.info(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=self._device)
-        
+
         # Load model state
         if 'model_state_dict' in checkpoint:
             self._network.load_state_dict(checkpoint['model_state_dict'], strict=False)
             logging.info(f"✅ Model weights loaded successfully")
         else:
             logging.warning("No model_state_dict found in checkpoint")
-        
+
         # Load task information if available
         if 'tasks' in checkpoint:
             self._cur_task = checkpoint['tasks']
             logging.info(f"✅ Task info loaded: current task = {self._cur_task}")
-        
+
         # iCaRL: Load class means for NME evaluation if available
         if 'class_means' in checkpoint:
             self._class_means = checkpoint['class_means']
             logging.info(f"✅ Class means loaded for {len(self._class_means)} classes")
         else:
             logging.warning("⚠️  No class means found in checkpoint - NME evaluation will be unavailable")
-        
+
+        # # ── [Step 1.6] Memory buffer 복원 (energy stats 계산용) ──────────
+        # if 'data_memory' in checkpoint and 'targets_memory' in checkpoint:
+        #     self._data_memory = checkpoint['data_memory']
+        #     self._targets_memory = checkpoint['targets_memory']
+        #     logging.info(f"[MemoryLoad] Restored {len(self._data_memory)} memory samples from checkpoint")
+        # if 'auxiliary_logits_memory' in checkpoint:
+        #     self._auxiliary_logits_memory = checkpoint['auxiliary_logits_memory']
+        #     logging.info(f"[MemoryLoad] Restored auxiliary logits memory from checkpoint")
+        # else:
+        #     logging.info("[MemoryLoad] No memory data in checkpoint (Task 0 or legacy checkpoint) – will build memory if needed")
+        # # ─────────────────────────────────────────────────────────────────
+
         self._network.eval()
         return checkpoint
 
@@ -1127,31 +1170,40 @@ class MMEABaseLearner(BaseLearner):
         
         # Load checkpoint with correct classifier size
         self.load_checkpoint(checkpoint_path)
-        
+
         # ─── [α-Diag] task별 energy 로깅 플래그 리셋 ──────────────────
         fusion = getattr(self._network, 'fusion', None)
         if fusion is not None:
             for mod in ['RGB', 'Gyro', 'Acce']:
                 setattr(fusion, f'_energy_logged_{mod}', False)
         # ────────────────────────────────────────────────────────────────
-        
+
         # Ensure model is on correct device
         self._network = self._network.to(self._device)
-        
+
         # Setup data loaders for evaluation
+        # ※ build_rehearsal_memory 보다 먼저 실행해야 train_loader가 준비됨
         self._setup_data_loaders_with_ood(data_manager)
-        
+
         # 🔍 DEBUG: Check if test_loader is properly set
         if hasattr(self, 'test_loader') and self.test_loader is not None:
             logging.info(f"✅ test_loader properly set with {len(self.test_loader.dataset)} samples")
         else:
             logging.error("❌ test_loader is not set properly!")
             raise AttributeError("test_loader was not set up correctly")
+
+        # ── [Step 1.6] Memory buffer 구성 ────────────────────────────────
+        # inference_mode에서 build_rehearsal_memory()가 호출되지 않으므로
+        # _setup_data_loaders_with_ood() 이후에 직접 실행하여 memory를 구성한다.
+        # ※ memory 구성 시점 = train 종료 직후
         
+        self.build_rehearsal_memory(data_manager, self.samples_per_class)
+        logging.info(f"[MemoryBuild] ✅ Memory built: {len(self._data_memory)} samples")
+        # ─────────────────────────────────────────────────────────────────
+
         # ── [Step 1.6] Modality별 energy 통계 계산 (Z-score 정규화용) ──
-        # train_loader를 활용해 modality별 energy mean/std를 계산하고
-        # fusion 모듈에 주입 → _compute_confidence()에서 Z-score 사용
-        self._compute_energy_stats_from_loader(self.train_loader)
+        # 모든 task에서 memory buffer를 사용하여 energy mean/std 계산
+        self._compute_energy_stats_from_memory(data_manager)
         # ────────────────────────────────────────────────────────────────
         
         # Perform evaluation
