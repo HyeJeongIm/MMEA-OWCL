@@ -11,7 +11,17 @@ import wandb
 
 from models.base import BaseLearner
 from utils.toolkit import target2onehot, tensor2numpy
-from ood import MSPDetector, EnergyDetector, ODINDetector, LTSIndividualDetector, LTSFusionDetector, LTSRGBOnlyDetector, LTSLateFusionDetector, LTSRGBOnlyNoNormDetector, LTSGyroOnlyDetector, LTSAcceOnlyDetector
+
+# 🎯 UnifiedOODDetector - MSP/Energy/MaxLogit 통합
+from ood import UnifiedOODDetector
+
+# 🔍 LTS methods
+from ood import LTSFusionDetector
+
+# 🔥 Feature-based OOD methods
+# from ood.methods.mahalanobis import MahalanobisDetector
+
+# 📊 Metrics
 from ood.metrics import compute_ood_metrics, compute_threshold_accuracy
 
 
@@ -93,8 +103,276 @@ class MMEABaseLearner(BaseLearner):
         logging.info(f"  📚 Train samples: {len(train_dataset)}")
         logging.info(f"  🧪 ID test samples: {len(test_dataset)}")
     
+    def _compute_total_loss(self, outputs, targets):
+        """
+        Main Loss와 Auxiliary Loss를 유연하게 결합하여 총 손실 계산
+        
+        Args:
+            outputs: 네트워크 forward 결과 딕셔너리
+            targets: 정답 레이블
+            
+        Returns:
+            dict: {
+                'total_loss': 최종 손실,
+                'main_loss': 주 손실,
+                'auxiliary_loss': 보조 손실 (있는 경우),
+                'aux_weight': 보조 손실 가중치,
+                'has_auxiliary': 보조 손실 사용 여부
+            }
+        """
+        # 1. Main Loss 계산 (항상 존재)
+        main_loss = F.cross_entropy(outputs["logits"], targets)
+        
+        # 2. Fusion 모듈이 자체 compute_total_loss() 메서드를 가지고 있는지 확인
+        fusion_module = None
+        if hasattr(self._network, 'fusion') and hasattr(self._network.fusion, 'compute_total_loss'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network') and hasattr(self._network.fusion_network, 'compute_total_loss'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module:
+            # Fusion 모듈의 compute_total_loss() 사용 (v2_6의 pretrain phase 체크 포함)
+            auxiliary_loss = outputs.get('auxiliary_loss', None)
+            total_loss = fusion_module.compute_total_loss(main_loss, auxiliary_loss)
+            
+            # Auxiliary loss 사용 여부 확인 (total_loss가 main_loss보다 크면 사용 중)
+            has_auxiliary = auxiliary_loss is not None and total_loss > main_loss
+            aux_weight = outputs.get('aux_loss_weight', 0.0) if has_auxiliary else 0.0
+            
+            return {
+                'total_loss': total_loss,
+                'main_loss': main_loss,
+                'auxiliary_loss': auxiliary_loss if auxiliary_loss is not None else torch.tensor(0.0, device=main_loss.device),
+                'aux_weight': aux_weight,
+                'has_auxiliary': has_auxiliary
+            }
+        else:
+            # Fusion 모듈이 없거나 compute_total_loss()가 없으면 기존 방식 사용
+            has_auxiliary = 'auxiliary_loss' in outputs and outputs['auxiliary_loss'] is not None
+            
+            if has_auxiliary:
+                auxiliary_loss = outputs['auxiliary_loss']
+                aux_weight = outputs.get('aux_loss_weight', 0.5)
+                
+                # Auxiliary loss가 실제로 0이 아닌 경우에만 결합
+                if isinstance(auxiliary_loss, torch.Tensor) and auxiliary_loss.item() > 0:
+                    total_loss = main_loss + aux_weight * auxiliary_loss
+                else:
+                    total_loss = main_loss
+                    has_auxiliary = False
+                
+                return {
+                    'total_loss': total_loss,
+                    'main_loss': main_loss,
+                    'auxiliary_loss': auxiliary_loss,
+                    'aux_weight': aux_weight if has_auxiliary else 0.0,
+                    'has_auxiliary': has_auxiliary
+                }
+            else:
+                # Auxiliary Loss가 없으면 Main Loss만 사용
+                return {
+                    'total_loss': main_loss,
+                    'main_loss': main_loss,
+                    'auxiliary_loss': torch.tensor(0.0, device=main_loss.device),
+                    'aux_weight': 0.0,
+                    'has_auxiliary': False
+                }
+    
+    def _collect_class_confidences(self, phase):
+        """
+        Class별 modality confidence를 수집하고 출력
+        
+        Args:
+            phase: 로깅 시점 ("START", "FROZEN", "END", "TEST")
+        
+        Train 시점 (START, FROZEN, END): train_loader 내의 모든 class
+        Test 시점 (TEST): test_loader 내의 모든 class (0 ~ total_classes-1)
+        """
+        # Fusion 모듈이 auxiliary head를 가지고 있는지 확인
+        fusion_module = None
+        if hasattr(self._network, 'fusion'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module is None or not hasattr(fusion_module, 'auxiliary_heads'):
+            logging.info(f"⚠️  No auxiliary heads found - skipping class-wise confidence logging")
+            return
+        
+        # 시점에 따라 적절한 loader 선택
+        if phase == "TEST":
+            loader = self.test_loader
+            loader_desc = "test_loader"
+        else:
+            loader = self.train_loader
+            loader_desc = "train_loader"
+        
+        # Class별로 confidence를 저장할 딕셔너리
+        class_confidences = {}  # {class_id: {modality: [confidences]}}
+        
+        # 네트워크를 eval 모드로 전환 (학습 중이어도 inference만 수행)
+        was_training = self._network.training
+        self._network.eval()
+        
+        logging.info(f"")
+        logging.info(f"{'='*80}")
+        logging.info(f"📊 Collecting Class-wise Modality Confidences ({phase})")
+        logging.info(f"   Task: {self._cur_task}, Epoch: {fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else 'N/A'}")
+        logging.info(f"   Data Source: {loader_desc}")
+        logging.info(f"{'='*80}")
+        
+        with torch.no_grad():
+            for _, inputs, targets in tqdm(loader, desc=f"Collecting confidences ({phase})", leave=False):
+                # 입력을 디바이스로 이동
+                for m in self._modality:
+                    inputs[m] = inputs[m].to(self._device)
+                targets = targets.to(self._device)
+                
+                # Forward pass
+                outputs = self._network(inputs)
+                
+                # Confidence 추출
+                if 'confidences' not in outputs or not outputs['confidences']:
+                    continue
+                
+                confidences_dict = outputs['confidences']
+                
+                # 각 샘플에 대해 class별로 confidence 저장 (필터링 없이 모든 class)
+                for i, target in enumerate(targets):
+                    class_id = target.item()
+                    
+                    if class_id not in class_confidences:
+                        class_confidences[class_id] = {mod: [] for mod in self._modality}
+                    
+                    # 각 모달리티의 confidence 저장
+                    for modality in self._modality:
+                        if modality in confidences_dict:
+                            conf_val = confidences_dict[modality][i].item()
+                            class_confidences[class_id][modality].append(conf_val)
+        
+        # 원래 모드로 복원
+        if was_training:
+            self._network.train()
+        
+        # Class별 통계 출력
+        if class_confidences:
+            collected_classes = sorted(class_confidences.keys())
+            num_classes = len(collected_classes)
+            class_range_str = f"{collected_classes[0]}~{collected_classes[-1]}" if num_classes > 1 else f"{collected_classes[0]}"
+            
+            logging.info(f"")
+            logging.info(f"📈 Class-wise Modality Confidence Statistics:")
+            logging.info(f"   Collected {num_classes} classes: {class_range_str}")
+            logging.info(f"{'='*80}")
+            
+            # Class별로 정렬해서 출력
+            for class_id in collected_classes:
+                logging.info(f"  Class {class_id}:")
+                
+                for modality in self._modality:
+                    if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
+                        confs = np.array(class_confidences[class_id][modality])
+                        mean_conf = confs.mean()
+                        std_conf = confs.std()
+                        min_conf = confs.min()
+                        max_conf = confs.max()
+                        count = len(confs)
+                        
+                        logging.info(f"    {modality}: mean={mean_conf:.4f}, std={std_conf:.4f}, "
+                                   f"min={min_conf:.4f}, max={max_conf:.4f}, count={count}")
+            
+            logging.info(f"{'='*80}")
+            
+            # wandb 로깅
+            if self.args.get('use_wandb', False):
+                wandb_log = {}
+                
+                for class_id in class_confidences.keys():
+                    for modality in self._modality:
+                        if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
+                            confs = np.array(class_confidences[class_id][modality])
+                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_mean"] = confs.mean()
+                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_std"] = confs.std()
+                
+                wandb_log[f"ClassConfidence/{phase}_task"] = self._cur_task
+                wandb_log[f"ClassConfidence/{phase}_epoch"] = fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else -1
+                
+                wandb.log(wandb_log)
+                logging.info(f"✅ Logged class-wise confidences to wandb ({phase})")
+        else:
+            logging.info(f"⚠️  No confidence data collected")
+    
+    def _setup_epoch_and_collect_confidence(self, epoch):
+        """
+        Epoch 설정 및 특정 시점에 class별 confidence 수집
+        
+        Args:
+            epoch: 현재 epoch
+            
+        Returns:
+            tuple: (is_first_epoch, is_frozen_epoch, is_last_epoch)
+        """
+        # 🔥 Fusion 모듈에 현재 epoch 정보 전달
+        fusion_module = None
+        if hasattr(self._network, 'fusion'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module is not None and hasattr(fusion_module, 'set_epoch'):
+            fusion_module.set_epoch(epoch)
+        
+        # 🎯 Epoch 시점 판단
+        pretrain_epochs = 5
+        if fusion_module and hasattr(fusion_module, 'pretrain_epochs'):
+            pretrain_epochs = fusion_module.pretrain_epochs
+        
+        is_first_epoch = (epoch == 0)
+        is_frozen_epoch = (epoch == pretrain_epochs)
+        is_last_epoch = (epoch == self._epochs - 1)
+        
+        # 🎯 특정 epoch 시작 시점에 class별 confidence 수집
+        if is_first_epoch or is_frozen_epoch or is_last_epoch:
+            phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
+            self._collect_class_confidences(phase)
+        
+        return is_first_epoch, is_frozen_epoch, is_last_epoch
+    
+    def _update_fusion_task(self):
+        """Update fusion model for new task (if supported)"""
+        # Check if fusion model supports task updates (e.g., auxiliary_head_v2)
+        fusion_module = None
+        if hasattr(self._network, 'fusion') and hasattr(self._network.fusion, 'update_task'):
+            fusion_module = self._network.fusion
+        elif hasattr(self._network, 'fusion_network') and hasattr(self._network.fusion_network, 'update_task'):
+            fusion_module = self._network.fusion_network
+        
+        if fusion_module:
+            # 🔥 Warm-up 상태 디버깅
+            if hasattr(fusion_module, 'warmup_epochs') and hasattr(fusion_module, 'current_epoch'):
+                logging.info(f"🔥 Fusion Warm-up Status BEFORE update_task:")
+                logging.info(f"   Task: {self._cur_task}, Current Epoch: {fusion_module.current_epoch}")
+                logging.info(f"   Warm-up Epochs: {fusion_module.warmup_epochs}")
+                logging.info(f"   Is Warm-up Phase: {fusion_module._is_warmup_phase() if hasattr(fusion_module, '_is_warmup_phase') else 'N/A'}")
+            
+            fusion_module.update_task(self._cur_task)
+            logging.info(f"🎯 Updated fusion model for Task {self._cur_task}")
+            
+            # 🔥 Warm-up 상태 디버깅 (업데이트 후)
+            if hasattr(fusion_module, 'warmup_epochs') and hasattr(fusion_module, 'current_epoch'):
+                logging.info(f"🔥 Fusion Warm-up Status AFTER update_task:")
+                logging.info(f"   Task: {self._cur_task}, Current Epoch: {fusion_module.current_epoch}")
+                logging.info(f"   Is Warm-up Phase: {fusion_module._is_warmup_phase() if hasattr(fusion_module, '_is_warmup_phase') else 'N/A'}")
+        else:
+            logging.info(f"⚠️  No fusion module with update_task method found for Task {self._cur_task}")
+    
+    
     def _train(self, train_loader, test_loader):
         self._network.to(self._device)
+        
+        # Update fusion model for new task (if supported)
+        self._update_fusion_task()
+        
         optimizer = self._choose_optimizer()
 
         # Setup scheduler
@@ -117,6 +395,9 @@ class MMEABaseLearner(BaseLearner):
         prog_bar = tqdm(range(self._epochs))
         for _, epoch in enumerate(prog_bar):
             self._network.train()
+            
+            # 🎯 Epoch 설정 및 confidence 수집 (공통 메서드 사용)
+            self._setup_epoch_and_collect_confidence(epoch)
                 
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
@@ -125,6 +406,8 @@ class MMEABaseLearner(BaseLearner):
 
             losses = 0.0
             correct, total = 0, 0
+            total_batches = len(train_loader)
+            
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
@@ -132,9 +415,48 @@ class MMEABaseLearner(BaseLearner):
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-
-                loss = F.cross_entropy(logits, targets)
+                
+                # 🎯 Forward pass with auxiliary loss support
+                outputs = self._network(inputs, targets=targets)
+                logits = outputs["logits"]
+                
+                # 🎯 유연한 총 손실 계산 (auxiliary loss가 있을 때만 결합)
+                loss_info = self._compute_total_loss(outputs, targets)
+                loss = loss_info['total_loss']
+                
+                # 🎯 디버깅 정보 출력 (auxiliary loss 사용 시)
+                if loss_info['has_auxiliary'] and i == 0:  # 첫 번째 배치에서만
+                    main_loss_val = loss_info['main_loss'].item()
+                    aux_loss_val = loss_info['auxiliary_loss'].item()
+                    aux_weight = loss_info['aux_weight']
+                    weighted_aux_loss = aux_weight * aux_loss_val
+                    total_loss_val = loss_info['total_loss'].item()
+                    
+                    # 🔥 Fusion 모듈의 warm-up 상태 확인
+                    fusion_module = None
+                    if hasattr(self._network, 'fusion'):
+                        fusion_module = self._network.fusion
+                    elif hasattr(self._network, 'fusion_network'):
+                        fusion_module = self._network.fusion_network
+                    
+                    warmup_info = ""
+                    if fusion_module and hasattr(fusion_module, '_is_warmup_phase'):
+                        is_warmup = fusion_module._is_warmup_phase()
+                        current_epoch = getattr(fusion_module, 'current_epoch', 'N/A')
+                        warmup_epochs = getattr(fusion_module, 'warmup_epochs', 'N/A')
+                        warmup_info = f" | Warm-up: {is_warmup} (Epoch {current_epoch}/{warmup_epochs})"
+                    
+                    logging.info(f"📊 Multi-task Learning (Task {self._cur_task}, Epoch {epoch}){warmup_info}:")
+                    logging.info(f"   🎯 Loss Scale Analysis:")
+                    logging.info(f"      Main Loss: {main_loss_val:.4f}")
+                    logging.info(f"      Aux Loss (raw): {aux_loss_val:.4f}")
+                    logging.info(f"      Aux Weight (λ): {aux_weight}")
+                    logging.info(f"      Aux Loss (weighted): {weighted_aux_loss:.4f}")
+                    logging.info(f"      Total Loss: {total_loss_val:.4f}")
+                    logging.info(f"   📈 Contribution Ratio:")
+                    logging.info(f"      Main: {main_loss_val/total_loss_val*100:.1f}% ({main_loss_val:.4f}/{total_loss_val:.4f})")
+                    logging.info(f"      Aux: {weighted_aux_loss/total_loss_val*100:.1f}% ({weighted_aux_loss:.4f}/{total_loss_val:.4f})")
+                    logging.info(f"   🔍 Loss Ratio: Main/Aux = {main_loss_val/aux_loss_val:.2f}:1")
 
                 # zero gradients
                 for opt in optimizers:
@@ -227,6 +549,9 @@ class MMEABaseLearner(BaseLearner):
         logging.info(f"=== Task {self._cur_task} CL Evaluation ===")
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
         
+        # 🎯 Test 시점에 class별 confidence 수집
+        self._collect_class_confidences("TEST")
+        
         # Standard CL accuracy evaluation
         cl_metrics = {}
         cnn_accy, nme_accy = self.eval_task()
@@ -260,7 +585,7 @@ class MMEABaseLearner(BaseLearner):
         """Evaluate only OOD detection performance"""
         if not self.enable_ood:
             logging.info("OOD evaluation disabled (enable_ood=False).")
-            return {}, {}
+            return {}, {}, {}
             
         logging.info(f"=== Task {self._cur_task} OOD Evaluation ===")
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
@@ -269,14 +594,14 @@ class MMEABaseLearner(BaseLearner):
         # Check OOD configuration
         if "ood_methods" not in self.args:
             logging.error("ood_methods not found in configuration file!")
-            return {}, {}
+            return {}, {}, {}
                   
         ood_methods = self.args["ood_methods"]
         logging.info(f"OOD Methods: {ood_methods}")
         
         if self.ood_test_loader is None:
             logging.warning("No OOD test data available. Skipping OOD evaluation.")
-            return {}, {}
+            return {}, {}, {}
         
         ood_results = {}
         score_distributions = {}
@@ -284,97 +609,148 @@ class MMEABaseLearner(BaseLearner):
         
         logging.info("=== OOD Detection Results ===")
                 
-        # Check if individual features are needed
-        need_individual_features = "LTS_Individual" in ood_methods
-        need_fusion_features = "LTS_Fusion" in ood_methods
+        # Check if fusion features are needed (only for LTS_Fusion now)
+        need_fusion_features_legacy = "LTS_Fusion" in ood_methods
         
         # Extract data in single forward pass
         print("  📊 Processing ID data (logits + features)...")
-        if need_individual_features:
-            print("  🔍 LTS_Individual detected - also extracting individual modality features...")
-        if need_fusion_features:
+        if need_fusion_features_legacy:
             print("  🔍 LTS_Fusion detected - also extracting fusion features...")
         
         id_data = self._extract_data_batch(
             self.test_loader, 
             extract_features=True, 
             extract_logits=True,
-            extract_individual_features=need_individual_features
+            extract_individual_features=False
         )
         id_logits = id_data['logits']
         id_features = id_data['features'] 
         id_labels = id_data['labels']
-        id_individual_features = id_data['individual_features']
         
         print("  🎯 Processing OOD data (logits + features)...")
         ood_data = self._extract_data_batch(
             self.ood_test_loader, 
             extract_features=True, 
             extract_logits=True,
-            extract_individual_features=need_individual_features
+            extract_individual_features=False
         )
         ood_logits = ood_data['logits']
         ood_features = ood_data['features']
         ood_labels = ood_data['labels']
-        ood_individual_features = ood_data['individual_features']
         
         print(f"✅ Data extracted - ID: logits{id_logits.shape}, features{id_features.shape}")
         print(f"                   OOD: logits{ood_logits.shape}, features{ood_features.shape}")
-        if need_individual_features:
-            print(f"                   Individual features: {len(id_individual_features)} modalities, shapes: {[f.shape for f in id_individual_features]}")
         
         # Store extracted data for visualization
         self._cached_id_data = {'features': id_features, 'labels': id_labels}
         self._cached_ood_data = {'features': ood_features, 'labels': ood_labels}
 
+        # 🔥 Auxiliary outputs 사전 수집 (UnifiedOODDetector Hybrid 모드용)
+        def needs_auxiliary_outputs(method_name):
+            """Check if method needs auxiliary outputs (auxiliary_logits, confidences)"""
+            return method_name.startswith(('MSP_Hybrid_', 'Energy_Hybrid_', 'MaxLogit_Hybrid_', 'Entropy_Hybrid_', 'ODIN_Hybrid_'))
+        
+        def needs_fusion_features(method_name):
+            """Check if method needs fusion features (LTS, ReAct, Scale, ASH_S)"""
+            return method_name.startswith(('LTS_', 'ReAct_', 'Scale_', 'ASH_S_'))
+        
+        need_auxiliary_outputs = any(needs_auxiliary_outputs(method) for method in ood_methods)
+        need_fusion_features = any(needs_fusion_features(method) for method in ood_methods)
+        id_auxiliary_outputs = None
+        ood_auxiliary_outputs = None
+        
+        if need_auxiliary_outputs:
+            print("  🔥 UnifiedOODDetector Hybrid methods detected - collecting auxiliary outputs...")
+            id_auxiliary_outputs = self._collect_outputs(self.test_loader)
+            ood_auxiliary_outputs = self._collect_outputs(self.ood_test_loader)
+            
+            if id_auxiliary_outputs is not None and ood_auxiliary_outputs is not None:
+                print(f"  ✅ Auxiliary outputs collected:")
+                print(f"     - Main logits: ✅")
+                print(f"     - Auxiliary logits: {list(id_auxiliary_outputs.get('auxiliary_logits', {}).keys())}")
+                print(f"     - Confidences: {list(id_auxiliary_outputs.get('confidences', {}).keys())}")
+
+                # ─── [α-Diag] task별 α_m 통계 로깅 + wandb 기록 ────────────
+                confs = id_auxiliary_outputs.get('confidences', {})
+                if confs:
+                    modality_names = list(confs.keys())
+                    conf_stacked = torch.stack(
+                        [confs[m] for m in modality_names], dim=0
+                    )  # [M, N]
+                    alpha = torch.softmax(conf_stacked, dim=0)  # [M, N]
+                    alpha_np = alpha.detach().cpu().numpy()
+
+                    logging.info(f"[α-Diag] Task {self._cur_task} | ID set α_m stats (N={alpha_np.shape[1]}):")
+                    for i, mod in enumerate(modality_names):
+                        a = alpha_np[i]
+                        logging.info(
+                            f"  α_{mod}: mean={a.mean():.4f}, std={a.std():.4f}, "
+                            f"min={a.min():.4f}, max={a.max():.4f}"
+                        )
+                    per_sample_std = alpha_np.std(axis=0)  # [N]
+                    logging.info(
+                        f"  per-sample std: mean={per_sample_std.mean():.4f}, "
+                        f"max={per_sample_std.max():.4f}  "
+                        f"(uniform→0.0, one-hot→{((2/3)**0.5)/3:.4f})"
+                    )
+
+                    if self.args.get('use_wandb', False):
+                        log_dict = {}
+                        for i, mod in enumerate(modality_names):
+                            a = alpha_np[i]
+                            log_dict[f"alpha_diag/{mod}_mean"] = float(a.mean())
+                            log_dict[f"alpha_diag/{mod}_std"]  = float(a.std())
+                        log_dict["alpha_diag/per_sample_std_mean"] = float(per_sample_std.mean())
+                        wandb.log(log_dict, step=self._cur_task)
+                # ──────────────────────────────────────────────────────────────
+            else:
+                print(f"  ❌ ERROR: Auxiliary outputs not available!")
+                print(f"     Hybrid methods require auxiliary head fusion, but model doesn't provide auxiliary outputs.")
+                print(f"     Please check if your fusion model has auxiliary heads enabled.")
+                raise ValueError("Hybrid OOD methods require auxiliary outputs, but they are not available from the model.")
+
         for method_name in tqdm(ood_methods, desc="OOD Methods", position=0):
             try:
-                # Initialize OOD detector
-                if method_name == "MSP":
-                    detector = MSPDetector(self._network, self._device)
-                elif method_name == "Energy":
-                    detector = EnergyDetector(self._network, self._device)
-                elif method_name == "ODIN":
-                    detector = ODINDetector(self._network, self._device)
-                elif method_name == "LTS_Individual":
-                    detector = LTSIndividualDetector(self._network, self._device)
+                # 🎯 UnifiedOODDetector: 모든 통합 방법론 처리
+                if method_name.startswith(('MSP_', 'Energy_', 'MaxLogit_', 'LTS_', 'ReAct_', 'Scale_', 'ASH_S_', 'ODIN_', 'Entropy_')):
+                    try:
+                        detector = UnifiedOODDetector.from_method_name(self._network, method_name, device=self._device)
+                        logging.info(f"  🔧 Created {method_name} detector:")
+                        logging.info(f"     - Method: {detector.method}")
+                        logging.info(f"     - Mode: {detector.mode}")
+                        logging.info(f"     - Base detector: {detector._base_detector.__class__.__name__}")
+                    except ValueError as e:
+                        logging.warning(f"⚠️  Failed to parse method name '{method_name}': {e}")
+                        continue
+                
+                # 🔍 LTS legacy method (only LTS_Fusion)
                 elif method_name == "LTS_Fusion":
                     detector = LTSFusionDetector(self._network, self._device)
-                elif method_name == "LTS_RGB_Only":
-                    detector = LTSRGBOnlyDetector(self._network, self._device)
-                elif method_name == "LTS_Late_Fusion":
-                    detector = LTSLateFusionDetector(self._network, self._device, fusion_method='weighted_average')
-                elif method_name == "LTS_RGB_Only_No_Norm":
-                    detector = LTSRGBOnlyNoNormDetector(self._network, self._device)
-                elif method_name == "LTS_Gyro_Only":
-                    detector = LTSGyroOnlyDetector(self._network, self._device)
-                elif method_name == "LTS_Acce_Only":
-                    detector = LTSAcceOnlyDetector(self._network, self._device)
+                
+                # 🎨 Feature transformation methods (ReAct, Scale, ASH-S)
+                elif method_name == "ReAct":
+                    from ood import ReActDetector
+                    detector = ReActDetector(self._network, self._device, threshold=1.0)
+                elif method_name == "Scale":
+                    from ood import ScaleDetector
+                    detector = ScaleDetector(self._network, self._device, percentile=90)
+                elif method_name == "ASH_S":
+                    from ood import ASHSDetector
+                    detector = ASHSDetector(self._network, self._device, percentile=90)
+                
+                # 🌡️ ODIN (requires input data)
+                elif method_name == "ODIN":
+                    from ood import ODINDetector
+                    detector = ODINDetector(self._network, self._device, temperature=1000.0, magnitude=0.0014)
+                
                 else:
-                    logging.warning(f"Unknown OOD method: {method_name}")
+                    logging.warning(f"⚠️  Unknown OOD method: {method_name}")
                     continue
                 
                 logging.info(f"Computing {method_name} scores...")
                 
-                # Special handling for LTS_Individual method (needs individual features)
-                if method_name == "LTS_Individual":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Individual method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_Individual processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Individual features: {len(id_individual_features)} modalities")
-                    for i, feat in enumerate(id_individual_features):
-                        logging.info(f"      Modality {i}: {feat.shape}")
-                    
-                    # Compute scores using pre-extracted individual features
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
-                    
-                    logging.info(f"  ✅ LTS_Individual scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Fusion":
+                # Special handling for LTS_Fusion method
+                if method_name == "LTS_Fusion":
                     if id_features is None or ood_features is None:
                         logging.error("LTS_Fusion method requires fusion features, but they were not extracted!")
                         continue
@@ -394,138 +770,166 @@ class MMEABaseLearner(BaseLearner):
                     ood_scores = detector.compute_scores_with_fusion_features(ood_logits, ood_features_tensor)
                     
                     logging.info(f"  ✅ LTS_Fusion scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_RGB_Only":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_RGB_Only method requires individual features, but they were not extracted!")
+                elif needs_fusion_features(method_name):
+                    # 🔥 LTS methods (UnifiedOODDetector LTS_Baseline only)
+                    logging.info(f"  🔥 Computing {method_name} with fusion features...")
+                    
+                    # Check if this is a UnifiedOODDetector (LTS_Baseline)
+                    if isinstance(detector, UnifiedOODDetector):
+                        # LTS_Baseline: only needs logits + fusion features
+                        id_features_tensor = torch.from_numpy(id_features).to(self._device)
+                        ood_features_tensor = torch.from_numpy(ood_features).to(self._device)
+                        
+                        id_outputs = {'logits': id_logits, 'fusion_features': id_features_tensor}
+                        ood_outputs = {'logits': ood_logits, 'fusion_features': ood_features_tensor}
+                        
+                        logging.info(f"     - Mode: {detector.mode}")
+                        logging.info(f"     - Logits: {id_logits.shape}")
+                        logging.info(f"     - Fusion features: {id_features.shape}")
+                        
+                        id_scores = detector.compute_scores_from_outputs(id_outputs)
+                        ood_scores = detector.compute_scores_from_outputs(ood_outputs)
+                    else:
+                        # Legacy LTS_Fusion detector (already handled above)
+                        logging.warning(f"  ⚠️  {method_name} already handled - skipping")
                         continue
                     
-                    # Check if RGB modality is available
-                    if "RGB" not in self._modality:
-                        logging.warning(f"  ⚠️  LTS_RGB_Only skipped - RGB modality not available in {self._modality}")
+                    logging.info(f"  ✅ Scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}, min={id_scores.min():.4f}, max={id_scores.max():.4f}")
+                    logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}, min={ood_scores.min():.4f}, max={ood_scores.max():.4f}")
+                
+                # 🌡️ ODIN (requires raw input data)
+                elif method_name == "ODIN":
+                    logging.info(f"  🌡️ ODIN processing (with input perturbation):")
+                    logging.info(f"    - Temperature: {detector.temperature}")
+                    logging.info(f"    - Magnitude: {detector.magnitude}")
+                    
+                    # ODIN requires batch-wise processing with raw inputs
+                    id_scores_list = []
+                    ood_scores_list = []
+                    
+                    # Process ID data
+                    for _, inputs, targets in tqdm(self.test_loader, desc="ODIN ID", leave=False):
+                        # Move inputs to device
+                        if isinstance(inputs, dict):
+                            for m in self._modality:
+                                inputs[m] = inputs[m].to(self._device)
+                            # For multi-modal, use first modality (RGB)
+                            main_input = inputs[self._modality[0]]
+                        else:
+                            main_input = inputs.to(self._device)
+                        
+                        # Compute ODIN scores
+                        scores = detector.odin_score(main_input)
+                        id_scores_list.append(scores)
+                    
+                    # Process OOD data
+                    for _, inputs, targets in tqdm(self.ood_test_loader, desc="ODIN OOD", leave=False):
+                        # Move inputs to device
+                        if isinstance(inputs, dict):
+                            for m in self._modality:
+                                inputs[m] = inputs[m].to(self._device)
+                            # For multi-modal, use first modality (RGB)
+                            main_input = inputs[self._modality[0]]
+                        else:
+                            main_input = inputs.to(self._device)
+                        
+                        # Compute ODIN scores
+                        scores = detector.odin_score(main_input)
+                        ood_scores_list.append(scores)
+                    
+                    # Concatenate all scores
+                    id_scores = np.concatenate(id_scores_list, axis=0)
+                    ood_scores = np.concatenate(ood_scores_list, axis=0)
+                    
+                    logging.info(f"  ✅ ODIN scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}")
+                    logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}")
+                
+                # 🎨 Feature transformation methods (ReAct, Scale, ASH-S)
+                elif method_name in ["ReAct", "Scale", "ASH_S"]:
+                    if id_features is None or ood_features is None:
+                        logging.error(f"{method_name} requires features, but they were not extracted!")
                         continue
                     
-                    logging.info(f"  🔍 LTS_RGB_Only processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Model modalities: {self._modality}")
-                    logging.info(f"    - Using RGB modality only (index {self._modality.index('RGB')})")
-                    rgb_idx = self._modality.index('RGB')
-                    logging.info(f"    - RGB features shape: ID={id_individual_features[rgb_idx].shape}, OOD={ood_individual_features[rgb_idx].shape}")
+                    logging.info(f"  🎨 {method_name} processing:")
+                    logging.info(f"    - ID features: {id_features.shape}")
+                    logging.info(f"    - OOD features: {ood_features.shape}")
                     
-                    # Create feature lists containing only RGB features
-                    rgb_id_features = [id_individual_features[rgb_idx]]
-                    rgb_ood_features = [ood_individual_features[rgb_idx]]
+                    # Convert numpy features to tensors
+                    id_features_tensor = torch.from_numpy(id_features).to(self._device)
+                    ood_features_tensor = torch.from_numpy(ood_features).to(self._device)
                     
-                    # Compute scores using RGB features only
-                    id_scores = detector.compute_scores_with_features(id_logits, rgb_id_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, rgb_ood_features)
+                    # Apply transformation
+                    if method_name == "ReAct":
+                        id_transformed = detector.react(id_features_tensor)
+                        ood_transformed = detector.react(ood_features_tensor)
+                        logging.info(f"    - ReAct threshold: {detector.threshold}")
+                    elif method_name == "Scale":
+                        id_transformed = detector.scale(id_features_tensor)
+                        ood_transformed = detector.scale(ood_features_tensor)
+                        logging.info(f"    - Scale percentile: {detector.percentile}")
+                    elif method_name == "ASH_S":
+                        id_transformed = detector.ash_s(id_features_tensor)
+                        ood_transformed = detector.ash_s(ood_features_tensor)
+                        logging.info(f"    - ASH-S percentile: {detector.percentile}")
                     
-                    logging.info(f"  ✅ LTS_RGB_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Late_Fusion":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Late_Fusion method requires individual features, but they were not extracted!")
+                    # Pass through FC layer to get logits
+                    with torch.no_grad():
+                        if hasattr(self._network, 'fc'):
+                            id_transformed_logits = self._network.fc(id_transformed)
+                            ood_transformed_logits = self._network.fc(ood_transformed)
+                        elif hasattr(self._network, 'classifier'):
+                            id_transformed_logits = self._network.classifier(id_transformed)
+                            ood_transformed_logits = self._network.classifier(ood_transformed)
+                        else:
+                            logging.error(f"  ❌ Network has no 'fc' or 'classifier' layer!")
                         continue
                     
-                    logging.info(f"  🔍 LTS_Late_Fusion processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Individual features: {len(id_individual_features)} modalities")
-                    logging.info(f"    - Fusion method: weighted_average")
+                    # Compute Energy scores
+                    id_scores = torch.logsumexp(id_transformed_logits, dim=1).cpu().numpy()
+                    ood_scores = torch.logsumexp(ood_transformed_logits, dim=1).cpu().numpy()
                     
-                    # Compute scores using late fusion approach
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
+                    logging.info(f"  ✅ {method_name} scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}")
+                    logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}")
+                
+                elif needs_auxiliary_outputs(method_name):
+                    # 🔥 UnifiedOODDetector Hybrid modes (non-LTS) - use pre-collected auxiliary outputs
+                    if id_auxiliary_outputs is None or ood_auxiliary_outputs is None:
+                        logging.error(f"  ❌ {method_name} requires auxiliary outputs but they are not available!")
+                        logging.error(f"     This should not happen - auxiliary outputs should have been collected.")
+                        raise ValueError(f"Auxiliary outputs required for {method_name} but not available")
                     
-                    # Check if method returned None (not applicable)
-                    if id_scores is None or ood_scores is None:
-                        logging.warning(f"  ⚠️  LTS_Late_Fusion returned None - skipping this method")
-                        continue
+                    logging.info(f"  📊 Computing {method_name} with auxiliary outputs...")
+                    logging.info(f"     - Main logits: {id_auxiliary_outputs['logits'].shape}")
+                    logging.info(f"     - Auxiliary logits: {list(id_auxiliary_outputs['auxiliary_logits'].keys())}")
+                    if 'confidences' in id_auxiliary_outputs:
+                        logging.info(f"     - Confidences: {list(id_auxiliary_outputs['confidences'].keys())}")
                     
-                    logging.info(f"  ✅ LTS_Late_Fusion scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_RGB_Only_No_Norm":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_RGB_Only_No_Norm method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_RGB_Only_No_Norm processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Using RGB modality only (index 0) WITHOUT L2 normalization")
-                    logging.info(f"    - RGB features shape: ID={id_individual_features[0].shape}, OOD={ood_individual_features[0].shape}")
-                    
-                    # Compute scores using RGB features only (no normalization)
-                    id_scores = detector.compute_scores_with_features(id_logits, id_individual_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, ood_individual_features)
-                    
-                    logging.info(f"  ✅ LTS_RGB_Only_No_Norm scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Gyro_Only":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Gyro_Only method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    # Check if Gyro modality is available
-                    if "Gyro" not in self._modality:
-                        logging.warning(f"  ⚠️  LTS_Gyro_Only skipped - Gyro modality not available in {self._modality}")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_Gyro_Only processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Model modalities: {self._modality}")
-                    gyro_idx = self._modality.index('Gyro')
-                    logging.info(f"    - Using Gyro modality only (index {gyro_idx})")
-                    logging.info(f"    - Gyro features shape: ID={id_individual_features[gyro_idx].shape}, OOD={ood_individual_features[gyro_idx].shape}")
-                    
-                    # Create feature lists containing only Gyro features
-                    gyro_id_features = [id_individual_features[gyro_idx]]
-                    gyro_ood_features = [ood_individual_features[gyro_idx]]
-                    
-                    # Compute scores using Gyro features only
-                    id_scores = detector.compute_scores_with_features(id_logits, gyro_id_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, gyro_ood_features)
-                    
-                    # Check if method returned None (not applicable)
-                    if id_scores is None or ood_scores is None:
-                        logging.warning(f"  ⚠️  LTS_Gyro_Only returned None - skipping this method")
-                        continue
-                    
-                    logging.info(f"  ✅ LTS_Gyro_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
-                elif method_name == "LTS_Acce_Only":
-                    if id_individual_features is None or ood_individual_features is None:
-                        logging.error("LTS_Acce_Only method requires individual features, but they were not extracted!")
-                        continue
-                    
-                    # Check if Accelerometer modality is available
-                    if "Acce" not in self._modality:
-                        logging.warning(f"  ⚠️  LTS_Acce_Only skipped - Acce modality not available in {self._modality}")
-                        continue
-                    
-                    logging.info(f"  🔍 LTS_Acce_Only processing:")
-                    logging.info(f"    - ID logits: {id_logits.shape}")
-                    logging.info(f"    - OOD logits: {ood_logits.shape}")
-                    logging.info(f"    - Model modalities: {self._modality}")
-                    acce_idx = self._modality.index('Acce')
-                    logging.info(f"    - Using Accelerometer modality only (index {acce_idx})")
-                    logging.info(f"    - Accelerometer features shape: ID={id_individual_features[acce_idx].shape}, OOD={ood_individual_features[acce_idx].shape}")
-                    
-                    # Create feature lists containing only Accelerometer features
-                    acce_id_features = [id_individual_features[acce_idx]]
-                    acce_ood_features = [ood_individual_features[acce_idx]]
-                    
-                    # Compute scores using Accelerometer features only
-                    id_scores = detector.compute_scores_with_features(id_logits, acce_id_features)
-                    ood_scores = detector.compute_scores_with_features(ood_logits, acce_ood_features)
-                    
-                    # Check if method returned None (not applicable)
-                    if id_scores is None or ood_scores is None:
-                        logging.warning(f"  ⚠️  LTS_Acce_Only returned None - skipping this method")
-                        continue
-                    
-                    logging.info(f"  ✅ LTS_Acce_Only scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                    try:
+                        id_scores = detector.compute_scores_from_outputs(id_auxiliary_outputs)
+                        ood_scores = detector.compute_scores_from_outputs(ood_auxiliary_outputs)
+                        logging.info(f"  ✅ Scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
+                        logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}, min={id_scores.min():.4f}, max={id_scores.max():.4f}")
+                        logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}, min={ood_scores.min():.4f}, max={ood_scores.max():.4f}")
+                    except ValueError as e:
+                        logging.error(f"  ❌ Failed to compute scores for {method_name}: {e}")
+                        raise
+                
                 else:
-                    # Regular methods using only logits
-                    id_scores = detector.compute_scores_from_cached_logits(id_logits)      
-                    ood_scores = detector.compute_scores_from_cached_logits(ood_logits) 
+                    # Regular methods using only logits (Baseline, Feature-based)
+                    if isinstance(detector, UnifiedOODDetector):
+                        # UnifiedOODDetector: use compute_scores_from_outputs with logits
+                        logging.info(f"  📊 Computing {method_name} (logit-level UnifiedOODDetector)...")
+                        id_outputs = {'logits': id_logits}
+                        ood_outputs = {'logits': ood_logits}
+                        id_scores = detector.compute_scores_from_outputs(id_outputs)
+                        ood_scores = detector.compute_scores_from_outputs(ood_outputs)
+                    else:
+                        # Legacy detectors: use compute_scores_from_cached_logits
+                        id_scores = detector.compute_scores_from_cached_logits(id_logits)      
+                        ood_scores = detector.compute_scores_from_cached_logits(ood_logits) 
                 
                 # Store score distributions for visualization
                 score_distributions[method_name] = {
@@ -542,7 +946,7 @@ class MMEABaseLearner(BaseLearner):
                     cm_fpr95 = metrics['confusion_fpr95']
                     cm_youden = metrics['confusion_youden']
                     
-                    logging.info(f"{method_name}: AUROC={metrics['auroc']:.2f}%, AUPR_ID={metrics['aupr_id']:.2f}%, AUPR_OOD={metrics['aupr_ood']:.2f}%")
+                    logging.info(f"{method_name}: AUROC={metrics['auroc']:.4f}%, AUPR_ID={metrics['aupr_id']:.4f}%, AUPR_OOD={metrics['aupr_ood']:.4f}%, FPR95={metrics['fpr95']:.4f}%")
                     logging.info(f"  CM@FPR95: TP={cm_fpr95['tp']} FP={cm_fpr95['fp']} TN={cm_fpr95['tn']} FN={cm_fpr95['fn']} | TPR={cm_fpr95['tpr']:.3f} FPR={cm_fpr95['fpr']:.3f}")
                     logging.info(f"  CM@YoudenJ: TP={cm_youden['tp']} FP={cm_youden['fp']} TN={cm_youden['tn']} FN={cm_youden['fn']} | YoudenJ={cm_youden['youdenJ']:.3f}")
                     
@@ -553,6 +957,7 @@ class MMEABaseLearner(BaseLearner):
                             f"Task/{method_name}_auroc": metrics['auroc'],
                             f"Task/{method_name}_aupr_id": metrics['aupr_id'],
                             f"Task/{method_name}_aupr_ood": metrics['aupr_ood'],
+                            f"Task/{method_name}_fpr95": metrics['fpr95'],
                             
                             # FPR95 기준 Confusion Matrix
                             f"Task/{method_name}_fpr95_tp": cm_fpr95['tp'],
@@ -596,34 +1001,134 @@ class MMEABaseLearner(BaseLearner):
         }
         
         return ood_results, score_distributions, ood_methods_metrics
-    
+
+    def _compute_energy_stats_from_memory(self, data_manager):
+        """
+        [Step 1.6 수정] Memory buffer 데이터 기반으로 modality별 energy mean/std 계산.
+
+        수정 이유:
+          (1) Train set 데이터는 현재 task에 편향되어 있어 energy 분포 추정에 부적합할 수 있음.
+          (2) memory buffer는 prev/current task 데이터가 균형적으로 포함되어 있어
+              energy 분포 추정에 더 적합함.
+          (3) inference_mode_evaluation에서 memory가 구성되어 있지 않으므로
+              build_rehearsal_memory 호출하여 memory를 구성함.
+          
+        Test: (1) memory 없음 → E_uniform fallback 사용 (stats 미주입)
+              (2) memory 있음 → memory 기반 energy stats 사용
+        """
+        fusion = getattr(self._network, 'fusion', None)
+        if fusion is None:
+            fusion = getattr(self._network, 'fusion_network', None)
+        if fusion is None or not hasattr(fusion, 'auxiliary_heads'):
+            logging.info("[EnergyStats] No auxiliary heads – skipping energy stats computation")
+            return
+
+        memory = self._get_memory()  # None if empty
+        if memory is None:
+            logging.info("[EnergyStats] No memory buffer (Task 0 or empty) – E_uniform fallback will be used")
+            return  # fusion._energy_stats = {} → _compute_confidence()가 E_uniform fallback 사용
+
+        data_mem, targets_mem = memory
+        logging.info(f"[EnergyStats] Computing energy stats from memory buffer ({len(data_mem)} samples) ...")
+
+        mem_dataset = data_manager.get_dataset(
+            [], source="train", mode="test",
+            appendent=(data_mem, targets_mem)
+        )
+        mem_loader = DataLoader(
+            mem_dataset,
+            batch_size=self._batch_size,
+            shuffle=False,
+            num_workers=self._num_workers,
+        )
+
+        self._network.eval()
+        energy_accum = {mod: [] for mod in self._modality}
+
+        # stats 계산 forward pass 중에는 [α-Diag] 로깅 플래그를 비활성화
+        # → 플래그가 소진되지 않아 실제 평가 시 norm=zscore 로그가 정상 출력됨
+        for mod_name in ['RGB', 'Gyro', 'Acce']:
+            setattr(fusion, f'_energy_logged_{mod_name}', True)  # suppress during stats computation
+
+        with torch.no_grad():
+            for i, (_, inputs, _) in enumerate(
+                tqdm(mem_loader, desc="EnergyStats(memory) forward", leave=False)
+            ):
+                if self.args.get("debug_mode") and i >= 10:
+                    break
+                if isinstance(inputs, dict):
+                    for m in inputs:
+                        inputs[m] = inputs[m].to(self._device)
+                else:
+                    inputs = inputs.to(self._device)
+
+                outputs = self._network(inputs)
+                aux_logits = outputs.get('auxiliary_logits', {})
+                for mod, logits in aux_logits.items():
+                    energy = -torch.logsumexp(logits, dim=1)  # [B]
+                    energy_accum[mod].append(energy.cpu())
+
+        energy_stats = {}
+        for mod, tensors in energy_accum.items():
+            if not tensors:
+                continue
+            all_e = torch.cat(tensors, dim=0)  # [N]
+            e_mean = all_e.mean().item()
+            e_std  = all_e.std().item()
+            energy_stats[mod] = (e_mean, e_std)
+            logging.info(
+                f"[EnergyStats] {mod}: mean={e_mean:.4f}, std={e_std:.4f}  "
+                f"(N={all_e.numel()})"
+            )
+
+        if energy_stats:
+            fusion.set_energy_stats(energy_stats)
+            logging.info("[EnergyStats] ✅ Memory-based energy stats injected into fusion module")
+            # stats 주입 후 플래그 리셋 → 실제 평가 시 norm=zscore 로그 출력
+            for mod_name in ['RGB', 'Gyro', 'Acce']:
+                setattr(fusion, f'_energy_logged_{mod_name}', False)
+        else:
+            logging.warning("[EnergyStats] ⚠️  No auxiliary logits found – stats not set")
+
     def load_checkpoint(self, checkpoint_path):
         """Load model from checkpoint for inference"""
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        
+
         logging.info(f"Loading checkpoint from: {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location=self._device)
-        
+
         # Load model state
         if 'model_state_dict' in checkpoint:
             self._network.load_state_dict(checkpoint['model_state_dict'], strict=False)
             logging.info(f"✅ Model weights loaded successfully")
         else:
             logging.warning("No model_state_dict found in checkpoint")
-        
+
         # Load task information if available
         if 'tasks' in checkpoint:
             self._cur_task = checkpoint['tasks']
             logging.info(f"✅ Task info loaded: current task = {self._cur_task}")
-        
+
         # iCaRL: Load class means for NME evaluation if available
         if 'class_means' in checkpoint:
             self._class_means = checkpoint['class_means']
             logging.info(f"✅ Class means loaded for {len(self._class_means)} classes")
         else:
             logging.warning("⚠️  No class means found in checkpoint - NME evaluation will be unavailable")
-        
+
+        # # ── [Step 1.6] Memory buffer 복원 (energy stats 계산용) ──────────
+        # if 'data_memory' in checkpoint and 'targets_memory' in checkpoint:
+        #     self._data_memory = checkpoint['data_memory']
+        #     self._targets_memory = checkpoint['targets_memory']
+        #     logging.info(f"[MemoryLoad] Restored {len(self._data_memory)} memory samples from checkpoint")
+        # if 'auxiliary_logits_memory' in checkpoint:
+        #     self._auxiliary_logits_memory = checkpoint['auxiliary_logits_memory']
+        #     logging.info(f"[MemoryLoad] Restored auxiliary logits memory from checkpoint")
+        # else:
+        #     logging.info("[MemoryLoad] No memory data in checkpoint (Task 0 or legacy checkpoint) – will build memory if needed")
+        # # ─────────────────────────────────────────────────────────────────
+
         self._network.eval()
         return checkpoint
 
@@ -645,24 +1150,61 @@ class MMEABaseLearner(BaseLearner):
         # Set total_classnum for OOD evaluation
         self.total_classnum = data_manager.get_total_classnum()
         
+        # 🎯 Reconstruct class_increments for grouped accuracy calculation in eval mode
+        # This is needed because after_task() is not called in eval mode
+        known_classes = 0
+        for i in range(task_id + 1):
+            task_size = data_manager.get_task_size(i)
+            self.class_increments.append([known_classes, known_classes + task_size - 1])
+            known_classes += task_size
+        
+        # Set _known_classes to the classes seen before the current task
+        # For task_id, this is the sum of all previous tasks
+        if task_id > 0:
+            self._known_classes = sum(data_manager.get_task_size(i) for i in range(task_id))
+        else:
+            self._known_classes = 0
+        
         # Update network classifier to match checkpoint size BEFORE loading
         self._update_classifier(self._total_classes)
         
         # Load checkpoint with correct classifier size
         self.load_checkpoint(checkpoint_path)
-        
+
+        # ─── [α-Diag] task별 energy 로깅 플래그 리셋 ──────────────────
+        fusion = getattr(self._network, 'fusion', None)
+        if fusion is not None:
+            for mod in ['RGB', 'Gyro', 'Acce']:
+                setattr(fusion, f'_energy_logged_{mod}', False)
+        # ────────────────────────────────────────────────────────────────
+
         # Ensure model is on correct device
         self._network = self._network.to(self._device)
-        
+
         # Setup data loaders for evaluation
+        # ※ build_rehearsal_memory 보다 먼저 실행해야 train_loader가 준비됨
         self._setup_data_loaders_with_ood(data_manager)
-        
+
         # 🔍 DEBUG: Check if test_loader is properly set
         if hasattr(self, 'test_loader') and self.test_loader is not None:
             logging.info(f"✅ test_loader properly set with {len(self.test_loader.dataset)} samples")
         else:
             logging.error("❌ test_loader is not set properly!")
             raise AttributeError("test_loader was not set up correctly")
+
+        # ── [Step 1.6] Memory buffer 구성 ────────────────────────────────
+        # inference_mode에서 build_rehearsal_memory()가 호출되지 않으므로
+        # _setup_data_loaders_with_ood() 이후에 직접 실행하여 memory를 구성한다.
+        # ※ memory 구성 시점 = train 종료 직후
+        
+        self.build_rehearsal_memory(data_manager, self.samples_per_class)
+        logging.info(f"[MemoryBuild] ✅ Memory built: {len(self._data_memory)} samples")
+        # ─────────────────────────────────────────────────────────────────
+
+        # ── [Step 1.6] Modality별 energy 통계 계산 (Z-score 정규화용) ──
+        # 모든 task에서 memory buffer를 사용하여 energy mean/std 계산
+        self._compute_energy_stats_from_memory(data_manager)
+        # ────────────────────────────────────────────────────────────────
         
         # Perform evaluation
         if self.enable_ood:
@@ -690,10 +1232,10 @@ class MMEABaseLearner(BaseLearner):
             raise NotImplementedError(f"Network {type(self._network)} doesn't support classifier update")
         
         # Run evaluations
-        cl_results = self.evaluate_cl()
+        cl_results, cl_metrics = self.evaluate_cl()
         
         if self.enable_ood:
-            ood_results, score_distributions = self.evaluate_ood()
+            ood_results, score_distributions, ood_metrics = self.evaluate_ood()
             return cl_results, ood_results, score_distributions
         else:
             return cl_results, {}, {}
@@ -705,6 +1247,87 @@ class MMEABaseLearner(BaseLearner):
         if hasattr(self, '_cached_ood_data'):
             del self._cached_ood_data
         logging.info("🧹 Cleared cached feature data to free memory")
+    
+    def _collect_outputs(self, loader):
+        """
+        모델의 전체 outputs를 수집 (auxiliary_logits, confidences, modality_weights 포함)
+        
+        Args:
+            loader: DataLoader
+            
+        Returns:
+            dict: 집계된 outputs {
+                'logits': tensor,
+                'auxiliary_logits': {modality: tensor},
+                'confidences': {modality: tensor},
+                'modality_weights': tensor
+            }
+            또는 None (auxiliary head fusion이 아닌 경우)
+        """
+        self._network.eval()
+        
+        all_logits = []
+        all_auxiliary_logits = {}
+        all_confidences = {}
+        all_modality_weights = []
+        
+        with torch.no_grad():
+            for _, inputs, targets in tqdm(loader, desc="Collecting outputs", leave=False):
+                if isinstance(inputs, dict):
+                    for m in inputs:
+                        inputs[m] = inputs[m].to(self._device)
+                else:
+                    inputs = inputs.to(self._device)
+                
+                # Forward pass
+                outputs = self._network(inputs)
+                
+                # Check if this is auxiliary head fusion
+                if 'auxiliary_logits' not in outputs or not outputs['auxiliary_logits']:
+                    return None  # Not auxiliary head fusion
+                
+                # Collect logits
+                all_logits.append(outputs['logits'].cpu())
+                
+                # Collect auxiliary logits
+                for modality, aux_logits in outputs['auxiliary_logits'].items():
+                    if modality not in all_auxiliary_logits:
+                        all_auxiliary_logits[modality] = []
+                    all_auxiliary_logits[modality].append(aux_logits.cpu())
+                
+                # Collect confidences
+                if 'confidences' in outputs and outputs['confidences']:
+                    for modality, conf in outputs['confidences'].items():
+                        if modality not in all_confidences:
+                            all_confidences[modality] = []
+                        all_confidences[modality].append(conf.cpu())
+                
+                # Collect modality weights
+                if 'modality_weights' in outputs and outputs['modality_weights'] is not None:
+                    all_modality_weights.append(outputs['modality_weights'].cpu())
+        
+        # Concatenate all batches
+        result = {
+            'logits': torch.cat(all_logits, dim=0)
+        }
+        
+        # Concatenate auxiliary logits
+        if all_auxiliary_logits:
+            result['auxiliary_logits'] = {}
+            for modality, logits_list in all_auxiliary_logits.items():
+                result['auxiliary_logits'][modality] = torch.cat(logits_list, dim=0)
+        
+        # Concatenate confidences
+        if all_confidences:
+            result['confidences'] = {}
+            for modality, conf_list in all_confidences.items():
+                result['confidences'][modality] = torch.cat(conf_list, dim=0)
+        
+        # Concatenate modality weights
+        if all_modality_weights:
+            result['modality_weights'] = torch.cat(all_modality_weights, dim=0)
+        
+        return result
     
     def _extract_data_batch(self, loader, extract_features=True, extract_logits=True, extract_individual_features=False):
         """
@@ -748,7 +1371,7 @@ class MMEABaseLearner(BaseLearner):
                     if extract_logits:
                         all_logits.append(outputs["logits"].cpu())
                     
-                    # 2. Features 추출 (fusion 출력)
+                    # 2. Features 추출 (after fusion 출력)
                     if extract_features:
                         features = None
                         if 'fusion_features' in outputs:

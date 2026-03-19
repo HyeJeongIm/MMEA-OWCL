@@ -8,6 +8,9 @@ from models.lwf import TBN_LwF, TSN_LwF
 from models.icarl import TBN_iCaRL, TSN_iCaRL
 from models.cmr_mfn import CMR_MFN
 from models.replay import TBN_Replay
+from models.der import TBN_DER, TSN_DER
+from models.foster import TBN_FOSTER, TSN_FOSTER
+from models.mmeader import TBN_MMEADER, TSN_MMEADER
 from models.upperbound import TBN_UpperBound
 
 def get_model(model_name, args):
@@ -26,6 +29,12 @@ def get_model(model_name, args):
         'cmr_mfn': CMR_MFN,
         'cmr_mfn_r': CMR_MFN,
         'tbn_replay': TBN_Replay,
+        'tbn_der': TBN_DER,
+        'tsn_der': TSN_DER,
+        'tbn_foster': TBN_FOSTER,
+        'tsn_foster': TSN_FOSTER,
+        'tbn_mmeader': TBN_MMEADER,
+        'tsn_mmeader': TSN_MMEADER,
         'tbn_upperbound': TBN_UpperBound,
     }
 

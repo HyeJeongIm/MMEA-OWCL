@@ -1,0 +1,53 @@
+{
+  "dataset": "mmea",
+  "modality": ["RGB", "Gyro", "Acce"],
+  "model_name": "tbn_mmeader",
+  "exemplar_selection": "herding",
+  
+  "backbone": "tbn",
+  "arch": "BNInception",
+  "fusion_type": "auxiliary_head_v2_7",
+  "consensus_type": "avg",
+  "before_softmax": true,
+  
+  "train_list": "mydataset_total_train.txt",
+  "test_list": "mydataset_test.txt",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+  
+  "num_segments": 8,
+  "batch_size": 8,
+  "workers": 4,
+  "dropout": 0.5,
+  
+  "lr": 0.001,
+  "lr_steps": [10, 20],
+  "momentum": 0.9,
+  "weight_decay": 0.0005,
+  "epochs": 50, 
+  "clip_gradient": 20,
+  
+  "memory_size": 320,
+  "increment": 8,
+  "shuffle": false,
+  
+  "pretrain_epochs": 50,
+  "confidence_method": "energy",
+  "energy_norm_method": "zscore",
+  "aux_loss_weight": 0.5,
+  "partialbn": true,
+  "freeze": false,
+
+  
+  "mode": "eval",
+  "enable_ood": true,
+  "ood_methods": ["Energy_Hybrid_ConfNormalized", "MaxLogit_Hybrid_ConfNormalized"],
+  "weights_path": "",
+
+  "seed": 1993,
+  "prefix": "mmea-owcl",
+  "log_test_acc": false,
+  "use_wandb": true,
+  "debug_mode": false,
+
+  "mmeader_alpha": 0.3
+}

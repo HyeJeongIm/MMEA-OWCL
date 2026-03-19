@@ -4,7 +4,8 @@ import logging
 import datetime
 
 from models.model_factory import get_model
-from utils.utils import set_random_seed, set_device
+from utils.utils import set_random_seed
+from utils.allocate_device import get_device
 from dataloader.data_manager import TBNDataManager, TSNDataManager
 
 
@@ -23,57 +24,83 @@ def train(args):
     pb_flag = "1" if args.get('partialbn', False) else "0"
     fr_flag = "1" if args.get('freeze', False) else "0"
     
+    # fusion_type 정보 추가 (기본값: concat)
+    fusion_type = args.get('fusion_type', 'concat')
+    
     experiment_name_parts = [
-        args['dataset'].replace('-', '_'),  # mmea-tbn -> mmea_tbn
+        args['dataset'],
         args['model_name'],
+        fusion_type,
         modality_str,
         f"ep{args['epochs']}",
         f"bs{args['batch_size']}",
         f"pb{pb_flag}",
         f"fr{fr_flag}",
         f"inc{args['increment']}",
-        f"mem{args['memory_size']}",
-        args.get('mode', 'train')
+        f"mem{args['memory_size']}"
     ]
+    
+    # 🔥 v2_7+: confidence_method는 경로에 포함하지 않음
+    # 이유: 1:1:1 균등 가중치를 사용하므로 confidence_method가 학습된 가중치에 영향을 주지 않음
+    # 학습 시: 고정된 경로에 저장
+    # 평가 시: 동일한 가중치를 불러와서 confidence_method만 config로 전달
     
     if suffix:
         experiment_name_parts.append(suffix)
     
     experiment_name = '_'.join(experiment_name_parts)
     
-    timestamp = datetime.datetime.now().strftime('%b%d_%H-%M-%S')
-    experiment_dir = os.path.join(experiment_name, timestamp)
+    # Determine if exemplar_selection should be included in the directory structure
+    model_name_lower = args['model_name'].lower()
+    exemplar_models = ('replay', 'foster', 'mmeader')
+    if any(name in model_name_lower for name in exemplar_models):
+        exemplar_selection = args.get('exemplar_selection', 'herding')
+    else:
+        exemplar_selection = None  # Don't add empty directory
+
+    experiment_dir_parts = [experiment_name]
+    if exemplar_selection:
+        experiment_dir_parts.append(exemplar_selection)
+    experiment_dir_parts.append(f"seed_{args['seed']}")
+
+    experiment_dir = os.path.join(*experiment_dir_parts)
+    log_dir = os.path.join("logs", experiment_dir)
+    weights_dir = os.path.join(log_dir, "weights")
+    results_dir = os.path.join(log_dir, "results")
     
     # mode에 따른 디렉토리 생성
     mode = args.get('mode', 'train')
     
     if mode == 'eval':
         # eval 모드: results/ 폴더 안에 실험 디렉토리 생성
-        results_dir = os.path.join("results", experiment_dir)
         os.makedirs(results_dir, exist_ok=True)
         
         print(f"✓ [EVAL] 실험 디렉토리 생성: {experiment_dir}")
         print(f"✓ [EVAL] 결과 저장 경로: {results_dir}")
+        print(f"✓ [EVAL] 모델 가중치 로드 경로: {weights_dir}")
+        
+        # train 모드에서는 파일 로깅도 포함
+        log_name = f"eval_{args['prefix']}_{args['seed']}_{args['model_name']}_" \
+                   f"{args['dataset']}_{args['init_cls']}_{args['increment']}.log"
+        log_path = os.path.join(results_dir, log_name)
         
         # eval 모드에서는 간단한 로거 설정 (콘솔 출력만)
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s [%(filename)s] => %(message)s",
             handlers=[
+                logging.FileHandler(log_path),
                 logging.StreamHandler(sys.stdout),
             ]
         )
     else:
         # train 모드: 기존과 동일 (weights/, logs/ 폴더)
-        weights_dir = os.path.join("weights", experiment_dir)
-        log_dir = os.path.join("logs", experiment_dir)
-        
-        os.makedirs(weights_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(weights_dir, exist_ok=True)
         
         print(f"✓ [TRAIN] 실험 디렉토리 생성: {experiment_dir}")
-        print(f"✓ [TRAIN] 모델 가중치 저장 경로: {weights_dir}")
         print(f"✓ [TRAIN] 로그 저장 경로: {log_dir}")
+        print(f"✓ [TRAIN] 모델 가중치 저장 경로: {weights_dir}")
         
         # train 모드에서는 파일 로깅도 포함
         log_name = f"{args['prefix']}_{args['seed']}_{args['model_name']}_" \
@@ -95,12 +122,12 @@ def train(args):
     
     # 랜덤 시드 및 디바이스 설정
     set_random_seed(args["seed"])
-    args["device"] = set_device(args["device"])
+    args["device"] = get_device()
     
     # mode에 따른 실행
     if mode == 'eval':
         # eval 모드에서는 weights_dir, log_dir가 없으므로 None 전달
-        _train(args, experiment_dir, None, None)
+        _train(args, experiment_dir, weights_dir, None)
     else:
         # train 모드
         _train(args, experiment_dir, weights_dir, log_dir)
@@ -141,7 +168,7 @@ def _train(args, experiment_dir, weights_dir, log_dir):
     execution_mode = args.get("mode", "train")
     
     if execution_mode == "eval":
-        all_ood_results = _run_eval_mode(args, model, data_manager, all_cl_results)
+        all_ood_results = _run_eval_mode(args, model, data_manager, weights_dir, all_cl_results)
     elif execution_mode == "train":
         _run_training_mode(args, model, data_manager, weights_dir, all_cl_results)
     elif execution_mode == "upperbound":
@@ -179,19 +206,29 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
     """Run training mode: train each task and evaluate"""
     logging.info("=== TRAINING MODE ===")
     
+    # OOD 결과 저장소 초기화
+    all_ood_results = {}
+    
     for task_id in range(data_manager.nb_tasks):
         print(f"\nTask {task_id + 1}/{data_manager.nb_tasks} 시작")
         
         # 증분 학습
         model.incremental_train(data_manager)
         
-        # CL 평가
+        # CL 평가 (tuple unpacking)
         cl_results, cl_metrics = model.evaluate_cl()
         
         # OOD 평가 (enable_ood=True인 경우에만)
         if args.get("enable_ood", False):
             ood_results, score_distributions, ood_metrics = model.evaluate_ood()
-            # OOD 결과도 저장하고 싶다면 여기서 처리
+            # OOD 결과 저장
+            task_key = f"task_{task_id}"
+            all_ood_results[task_key] = ood_results
+            # Wandb 로깅 (CL + OOD)
+            model.auto_wandb_log(cl_metrics, ood_metrics, task_id + 1)
+        else:
+            # Wandb 로깅 (CL only)
+            model.auto_wandb_log(cl_metrics, {}, task_id + 1)
         
         # 결과 저장
         task_key = f"task_{task_id}"
@@ -213,23 +250,48 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
         # 태스크 요약
         cl_acc = cl_results['cnn']['top1']
         print(f"Task {task_id + 1} 완료 - CL 정확도: {cl_acc:.1f}%")
-        if args["enable_ood"]:
-            model.auto_wandb_log(cl_metrics, ood_metrics, task_id + 1)
+    
+    # 🎯 모든 task 완료 후 평균 메트릭 계산 및 로깅
+    if args.get("enable_ood", False) and all_ood_results and args.get("use_wandb", False):
+        _log_average_ood_metrics(all_ood_results, args)
+
+
+def _get_checkpoint_path(weights_dir, model, args, task_id):
+    """
+    🎯 체크포인트 경로를 모델 타입에 따라 반환
+    MMEADER 모델의 경우 파라미터별 서브디렉토리를 포함한 경로 반환
+    """
+    # MMEADER 모델인지 확인
+    if hasattr(model, 'mmeader_alpha'):
+        # MMEADER 파라미터 정보 가져오기
+        alpha = model.mmeader_alpha
+        aux_weight = args.get("aux_loss_weight", 0.5)
+
+        # 파라미터별 서브디렉토리 경로 생성
+        param_subdir = f"alpha{alpha}_aux{aux_weight}"
+        mmeader_weights_dir = os.path.join(weights_dir, param_subdir)
+        
+        # 서브디렉토리가 존재하는지 확인
+        if os.path.exists(mmeader_weights_dir):
+            checkpoint_path = os.path.join(mmeader_weights_dir, f"task_{task_id}_checkpoint_{task_id}.pkl")
+            logging.info(f"🎯 MMEADER: Using parameter-specific directory: {param_subdir}")
+            return checkpoint_path
         else:
-            model.auto_wandb_log(cl_metrics, {}, task_id + 1)
+            logging.warning(f"⚠️  MMEADER parameter directory not found: {mmeader_weights_dir}")
+            logging.warning(f"    Falling back to base weights_dir")
+    
+    # 일반 모델 또는 서브디렉토리를 찾지 못한 경우 기본 경로 사용
+    checkpoint_path = os.path.join(weights_dir, f"task_{task_id}_checkpoint_{task_id}.pkl")
+    return checkpoint_path
 
 
-def _run_eval_mode(args, model, data_manager, all_cl_results):
+def _run_eval_mode(args, model, data_manager, weights_dir, all_cl_results):
     """Run evaluation mode: load pre-trained weights and evaluate OOD only"""
     logging.info("=== EVALUATION MODE ===")
     
-    # 가중치 경로 확인
-    weights_path = args.get("weights_path")
-    if not weights_path:
-        raise ValueError("weights_path is required for eval mode")
-    
-    if not os.path.exists(weights_path):
-        raise FileNotFoundError(f"Weights directory not found: {weights_path}")
+    # 가중치 경로 확인    
+    if not os.path.exists(weights_dir):
+        raise FileNotFoundError(f"Weights directory not found: {weights_dir}")
     
     # OOD 결과 저장소 초기화
     all_ood_results = {}
@@ -237,8 +299,8 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
     for task_id in range(data_manager.nb_tasks):
         print(f"\nTask {task_id + 1}/{data_manager.nb_tasks} OOD 평가 시작")
         
-        # 체크포인트 경로 찾기
-        checkpoint_path = os.path.join(weights_path, f"task_{task_id}_checkpoint_{task_id}.pkl")
+        # 체크포인트 경로 찾기 (MMEADER 모델인 경우 파라미터별 서브디렉토리 고려)
+        checkpoint_path = _get_checkpoint_path(weights_dir, model, args, task_id)
         
         try:
             # Evaluation 모드로 OOD 평가 실행
@@ -274,8 +336,72 @@ def _run_eval_mode(args, model, data_manager, all_cl_results):
             logging.error(f"Task {task_id + 1} evaluation failed: {e}")
             continue
     
+    # 🎯 모든 task 완료 후 평균 메트릭 계산 및 로깅
+    if args.get("enable_ood", False) and all_ood_results and args.get("use_wandb", False):
+        _log_average_ood_metrics(all_ood_results, args)
+    
     # OOD 결과가 있으면 반환
     return all_ood_results if all_ood_results else None
+
+
+def _log_average_ood_metrics(all_ood_results, args):
+    """
+    모든 task의 OOD 메트릭 평균 계산 및 Wandb 로깅
+    
+    Args:
+        all_ood_results: {
+            'task_0': {'Energy': {'auroc': 85.3, 'aupr_id': 88.7, ...}},
+            'task_1': {'Energy': {'auroc': 87.1, 'aupr_id': 90.2, ...}},
+            ...
+        }
+        args: 설정 딕셔너리
+    """
+    import wandb
+    
+    logging.info("\n" + "="*70)
+    logging.info("📊 Computing Average OOD Metrics Across All Tasks")
+    logging.info("="*70)
+    
+    # Method별 메트릭 수집
+    method_metrics = {}  # {'Energy': {'auroc': [85.3, 87.1, ...], 'aupr_id': [88.7, 90.2, ...], ...}}
+    
+    for task_key, ood_results in all_ood_results.items():
+        for method_name, metrics in ood_results.items():
+            if 'error' in metrics:
+                continue  # 에러가 있는 결과는 제외
+            
+            if method_name not in method_metrics:
+                method_metrics[method_name] = {}
+            
+            # 각 메트릭 수집
+            for metric_name, metric_value in metrics.items():
+                if isinstance(metric_value, (int, float)):  # 숫자형 메트릭만
+                    if metric_name not in method_metrics[method_name]:
+                        method_metrics[method_name][metric_name] = []
+                    method_metrics[method_name][metric_name].append(metric_value)
+    
+    # 평균 계산 및 로깅
+    avg_metrics = {}
+    
+    for method_name, metrics in method_metrics.items():
+        logging.info(f"\n🔍 {method_name} - Average Metrics:")
+        
+        for metric_name, values in metrics.items():
+            if len(values) > 0:
+                avg_value = sum(values) / len(values)
+                
+                # Wandb 키 생성
+                wandb_key = f"Average_OOD/{method_name}_{metric_name}"
+                avg_metrics[wandb_key] = avg_value
+                
+                # 콘솔 로그
+                logging.info(f"   {metric_name}: {avg_value:.2f}% (over {len(values)} tasks)")
+    
+    # Wandb에 평균 메트릭 로깅
+    if avg_metrics:
+        wandb.log(avg_metrics)
+        logging.info(f"\n✅ Logged {len(avg_metrics)} average OOD metrics to wandb")
+        logging.info("="*70)
 
 
 def _log_final_summary(cl_results, nb_tasks, ood_results=None):
@@ -476,6 +602,27 @@ def _log_final_summary(cl_results, nb_tasks, ood_results=None):
                 logging.info("    AUPR_OOD Ranking (OOD Detection):")
                 for i, (method, score) in enumerate(aupr_ood_scores, 1):
                     logging.info(f"      {i}. {method:8}: {score:5.1f}%")
+            
+            # FPR95 comparison (lower is better)
+            fpr95_scores = []
+            for method in methods:
+                avg_fpr95 = 0
+                valid_tasks = 0
+                for task_id in range(nb_tasks):
+                    task_key = f"task_{task_id}"
+                    if (task_key in ood_results and method in ood_results[task_key] and 
+                        'error' not in ood_results[task_key][method] and
+                        'fpr95' in ood_results[task_key][method]):
+                        avg_fpr95 += ood_results[task_key][method]['fpr95']
+                        valid_tasks += 1
+                if valid_tasks > 0:
+                    fpr95_scores.append((method, avg_fpr95 / valid_tasks))
+            
+            if fpr95_scores:
+                fpr95_scores.sort(key=lambda x: x[1], reverse=False)  # Lower is better
+                logging.info("    FPR95 Ranking (Lower is Better):")
+                for i, (method, score) in enumerate(fpr95_scores, 1):
+                    logging.info(f"      {i}. {method:8}: {score:5.1f}%")
         else:
             logging.info("  No valid OOD results found")
     
@@ -493,7 +640,10 @@ def _run_upperbound_mode(args, model, data_manager, weights_dir, all_cl_results)
     
     # Evaluate upper-bound performance
     logging.info("📊 Evaluating Upper-bound Performance...")
-    cl_results = model.evaluate_cl()
+    cl_results, cl_metrics = model.evaluate_cl()
+    
+    # Wandb 로깅
+    model.auto_wandb_log(cl_metrics, {}, 0)
     
     # Store results
     all_cl_results["upperbound"] = cl_results

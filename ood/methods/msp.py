@@ -3,7 +3,16 @@ import torch.nn.functional as F
 from .base_ood import BaseOODDetector
 
 class MSPDetector(BaseOODDetector):
-    """Maximum Softmax Probability (MSP) Detector"""
+    """
+    🎯 DEPRECATED: Use MSPAuxLogitsConfRawLogitLevelDetector instead
+    
+    This class is kept for backward compatibility.
+    The new naming convention is:
+    - MSPAuxLogitsConfRawLogitLevelDetector: Raw confidence at logit level
+    - MSPAuxLogitsConfNormalizedLogitLevelDetector: Normalized confidence at logit level
+    - MSPAuxLogitsConfRawScoreLevelDetector: Raw confidence at score level
+    - MSPAuxLogitsConfNormalizedScoreLevelDetector: Normalized confidence at score level
+    """
     
     def _compute_scores_from_logits(self, logits):
         """Compute MSP scores: max softmax probability"""

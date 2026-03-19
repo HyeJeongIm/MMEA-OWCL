@@ -1,0 +1,71 @@
+{
+  "dataset": "mmea",
+  "modality": ["RGB", "Gyro", "Acce"],
+  "model_name": "tbn_foster",
+  
+  "backbone": "tbn",
+  "arch": "BNInception",
+  "fusion_type": "concat",
+  "consensus_type": "avg",
+  "before_softmax": true,
+  
+  "train_list": "mydataset_total_train.txt",
+  "test_list": "mydataset_test.txt",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+  
+  "num_segments": 8,
+  "batch_size": 8,
+  "workers": 4,
+  "dropout": 0.5,
+  
+  "lr": 0.001,
+  "lr_steps": [10, 20],
+  "momentum": 0.9,
+  "weight_decay": 0.0005,
+  "epochs": 50,
+  "clip_gradient": 20,
+  
+  "memory_size": 320,
+  "increment": 8,
+  "shuffle": false,
+  
+  "pretrain_epochs": 10,
+  "confidence_method": "energy",
+
+  "partialbn": true,
+  "freeze": false,
+  
+  "lambda_okd": 1.0,
+  "lambda_fe": 1.0,
+  "T": 2,
+  "beta1": 0.96,
+  "beta2": 0.97,
+  "is_teacher_wa": true,
+  "is_student_wa": true,
+  "wa_value": 1.0,
+  "use_compression": true,
+  "compression_epochs": 20,
+  
+  "mode": "train",
+  "enable_ood": false,
+  "ood_methods": [
+    "MSP_Baseline",
+    "Energy_Baseline",
+    "ReAct_Baseline",
+    "Scale_Baseline", 
+    "ASH_S_Baseline",
+    "ODIN_Baseline",
+    "Entropy_Baseline",
+    "LTS_Baseline",
+    "MaxLogit_Baseline"
+  ],
+  "weights_path": "",
+  
+  "seed": 1993,
+  "device": [0],
+  "prefix": "mmea-owcl",
+  "log_test_acc": false,
+  "use_wandb": true,
+  "debug_mode": false
+}
+

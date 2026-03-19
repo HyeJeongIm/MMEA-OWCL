@@ -177,6 +177,7 @@ def compute_ood_metrics(id_scores, ood_scores, method_name="OOD"):
         auroc = compute_auroc(id_scores, ood_scores)
         aupr_id = compute_aupr_id(id_scores, ood_scores)    # ID as positive
         aupr_ood = compute_aupr_ood(id_scores, ood_scores)  # OOD as positive
+        fpr95 = compute_fpr95(id_scores, ood_scores)        # FPR at 95% TPR
         cm_fpr95 = confusion_matrix_at_fpr95(id_scores, ood_scores)  # FPR95 기준
         cm_youden = confusion_matrix_at_youdenJ(id_scores, ood_scores)  # Youden's J 기준
 
@@ -185,6 +186,7 @@ def compute_ood_metrics(id_scores, ood_scores, method_name="OOD"):
             'auroc': auroc,
             'aupr_id': aupr_id,     # ID detection performance
             'aupr_ood': aupr_ood,   # OOD detection performance
+            'fpr95': fpr95,         # FPR at 95% TPR
             'id_samples': len(id_scores),
             'ood_samples': len(ood_scores),
             'confusion_fpr95': cm_fpr95,      # FPR95 기준 confusion matrix

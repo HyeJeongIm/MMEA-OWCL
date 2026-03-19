@@ -70,6 +70,38 @@ class LTSFusionDetector(BaseOODDetector):
         
         return scale
     
+    def _calculate_lts_scale(self, features):
+        """
+        Public wrapper for lts_scale (UnifiedOODDetector용)
+        Args:
+            features: tensor (batch_size, feature_dim)
+        Returns:
+            scale: LTS scale tensor (batch_size,) - squeezed version
+        """
+        scale = self.lts_scale(features)  # (batch_size, 1)
+        return scale.squeeze(-1)  # (batch_size,)
+    
+    def compute_scores_with_precomputed_scale(self, logits, lts_scale):
+        """
+        Precomputed LTS scale을 사용하여 OOD scores 계산
+        Args:
+            logits: tensor (batch_size, num_classes)
+            lts_scale: tensor (batch_size,)
+        Returns:
+            scores: numpy array (batch_size,)
+        """
+        # Reshape scale for broadcasting
+        if lts_scale.dim() == 1:
+            lts_scale = lts_scale.unsqueeze(-1)  # (batch_size, 1)
+        
+        # Apply scale to logits
+        scaled_logits = logits * lts_scale
+        
+        # Use Energy-based method to compute final OOD scores
+        final_scores = self.energy_detector._compute_scores_from_logits(scaled_logits)
+        
+        return final_scores
+    
     def _compute_scores_from_logits(self, logits):
         """
         Fallback: use regular energy score when fusion features not available

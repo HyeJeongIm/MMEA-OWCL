@@ -6,6 +6,7 @@
   "backbone": "tbn",
   "arch": "BNInception",
   "fusion_type": "concat",
+  "shared_dim": 512,
   "consensus_type": "avg",
   "before_softmax": true,
   

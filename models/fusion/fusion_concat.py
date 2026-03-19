@@ -20,7 +20,12 @@ class FusionConcat(nn.Module):
         # Dropout layer (for both multi-modal and single modality)
         self.dropout_layer = nn.Dropout(p=dropout) if dropout > 0 else nn.Identity()
 
-    def forward(self, inputs):
+    def forward(self, inputs, targets=None):
+        """
+        Args:
+            inputs: List of modality features
+            targets: Ground truth labels (not used in concat fusion, for interface compatibility)
+        """
         if len(self.modality) > 1:  # Multi-modal fusion
             x = torch.cat(inputs, dim=1)
             x = self.fc1(x)

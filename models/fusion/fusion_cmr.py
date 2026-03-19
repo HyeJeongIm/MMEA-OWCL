@@ -71,7 +71,7 @@ class FusionCMR(nn.Module):
         if self.fusion_type == 'attention':
             self.selfat = Attention(self.input_dim)
 
-    def forward(self, inputs):
+    def forward(self, inputs, targets=None):
         """
         inputs: dict with modality keys
         returns: dict with 'features' key

@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from utils.toolkit import tensor2numpy, accuracy
+from utils.allocate_device import get_device
 from scipy.spatial.distance import cdist
 
 EPSILON = 1e-8
@@ -25,8 +26,9 @@ class BaseLearner(object):
         self._memory_size = args["memory_size"]
         self._memory_per_class = args.get("memory_per_class", None)
         self._fixed_memory = args.get("fixed_memory", False)
-        self._device = args["device"][0]
-        self._multiple_gpus = args["device"]
+        self._device = args["device"]
+        # Warning: Don't use multi-gpus
+        self._multiple_gpus = [0]
 
     # 현재 리허설 메모리에 들어있는 총 샘플 수 반환 
     @property
@@ -152,13 +154,20 @@ class BaseLearner(object):
         vectors, targets = [], []
         for _, _inputs, _targets in loader:
             _targets = _targets.numpy()
+            
+            # 🎯 Multimodal 입력 처리: dict이면 각 modality를 device로 이동
+            if isinstance(_inputs, dict):
+                _inputs = {k: v.to(self._device) for k, v in _inputs.items()}
+            else:
+                _inputs = _inputs.to(self._device)
+            
             if isinstance(self._network, nn.DataParallel):
                 _vectors = tensor2numpy(
-                    self._network.module.extract_vector(_inputs.to(self._device))
+                    self._network.module.extract_vector(_inputs)
                 )
             else:
                 _vectors = tensor2numpy(
-                    self._network.extract_vector(_inputs.to(self._device))
+                    self._network.extract_vector(_inputs)
                 )
 
             vectors.append(_vectors)
@@ -267,7 +276,9 @@ class BaseLearner(object):
                 idx_dataset, batch_size=batch_size, shuffle=False, num_workers=4
             )
             vectors, _ = self._extract_vectors(idx_loader)
+            # 안정적인 거리 계산을 위해 특징 벡터를 L2 정규화
             vectors = (vectors.T / (np.linalg.norm(vectors.T, axis=0) + EPSILON)).T
+            # 이 클래스의 '중심점(평균)'을 계산. 이것이 우리가 근사하려는 목표
             mean = np.mean(vectors, axis=0)
             mean = mean / np.linalg.norm(mean)
 

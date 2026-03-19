@@ -24,7 +24,9 @@ class TSNBaseline(nn.Module):
         self.backbone_name = args["backbone"]  # e.g., 'tsn'
         self.fusion_type = args["fusion_type"]  # e.g., 'attention', 'concat'
         self.dropout = args["dropout"]
-
+        self.confidence_method = args.get("confidence_method", "max_prob")  # Confidence 계산 방법
+        self.aux_loss_weight = args.get("aux_loss_weight", 0.5)  # Auxiliary loss 가중치
+        
         self.fusion_networks = nn.ModuleList()
         self.fc_list = nn.ModuleList()
         self.fc = None  # Current classifier
@@ -38,7 +40,10 @@ class TSNBaseline(nn.Module):
             feature_dim=768,  # ViT feature dimension
             modality=self.modality,
             dropout=self.dropout,
-            num_segments=self.num_segments
+            num_segments=self.num_segments,
+            pretrain_epochs=args.get("pretrain_epochs", None),  # Auxiliary head pretrain epochs (JSON에서 설정 가능)
+            confidence_method=args.get("confidence_method", "max_prob"),  # Confidence 계산 방법 (JSON에서 설정 가능)
+            aux_loss_weight=args.get("aux_loss_weight", 0.5)  # Auxiliary loss 가중치 (JSON에서 설정 가능)
         )
 
         # Set feature dimension for classifier
@@ -140,7 +145,9 @@ class TSNBaseline(nn.Module):
             feature_dim=768,
             modality=self.modality,
             dropout=self.dropout,
-            num_segments=self.num_segments
+            num_segments=self.num_segments,
+            confidence_method=self.confidence_method,
+            aux_loss_weight=self.aux_loss_weight
         )
         new_fusion.load_state_dict(self.fusion_network.state_dict())
         self.fusion_networks.append(new_fusion)

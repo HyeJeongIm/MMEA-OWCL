@@ -77,6 +77,9 @@ class iCaRL(MMEABaseLearner):
         for _, epoch in enumerate(prog_bar):
             self._network.train()
             
+            # 🎯 Epoch 설정 및 confidence 수집 (공통 메서드 사용)
+            self._setup_epoch_and_collect_confidence(epoch)
+            
             if self._partialbn:
                 self._network.backbone.freeze_fn('partialbn_statistics')
             if self._freeze:
@@ -84,6 +87,7 @@ class iCaRL(MMEABaseLearner):
                 
             losses = 0.0
             correct, total = 0, 0
+            
             for i, (_, inputs, targets) in enumerate(train_loader):
                 if self.args["debug_mode"] and i >= 5:
                     break
@@ -91,16 +95,24 @@ class iCaRL(MMEABaseLearner):
                 for m in self._modality:
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
-                logits = self._network(inputs)["logits"]
-
-                loss_clf = F.cross_entropy(logits, targets)
+                
+                # 🎯 Forward pass with auxiliary loss support
+                outputs = self._network(inputs, targets=targets)
+                logits = outputs["logits"]
+                
+                # 🎯 Classification loss + auxiliary loss 결합
+                loss_info = self._compute_total_loss(outputs, targets)
+                loss_clf_with_aux = loss_info['total_loss']
+                
+                # 🎯 Knowledge Distillation loss 계산
                 loss_kd = _KD_loss(
-                    logits[:, : self._known_classes],
+                    outputs["logits"][:, : self._known_classes],
                     self._old_network(inputs)["logits"],
                     T,
                 )
-
-                loss = loss_clf + loss_kd
+                
+                # 🎯 최종 손실 = (Classification + Auxiliary) + Knowledge Distillation
+                loss = loss_clf_with_aux + loss_kd
 
                 # zero gradients
                 for opt in optimizers:
