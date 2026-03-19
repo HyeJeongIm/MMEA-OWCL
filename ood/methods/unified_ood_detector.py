@@ -34,7 +34,8 @@ class UnifiedOODDetector(BaseOODDetector):
     
     지원하는 모드 (mode):
         - 'baseline': Main logits만 사용
-        - 'hybrid_noweight': Main logits (가중치 1) + Auxiliary logits (가중치 1씩) 균등 합산
+        - 'hybrid_uniform_sum': Main + Aux logits, 각 모달리티 가중치 1:1:1 (합산)
+        - 'hybrid_uniform_average': Main (1) + Aux logits (각 1/N, N=모달리티 개수)
         - 'hybrid_conf_raw': Main logits (가중치 1) + Auxiliary logits (raw confidence로 가중)
         - 'hybrid_conf_normalized': Main logits (가중치 1) + Auxiliary logits (normalized confidence로 가중)
     
@@ -50,18 +51,19 @@ class UnifiedOODDetector(BaseOODDetector):
         # 방법 2: Method name으로 자동 생성 (추천)
         detector = UnifiedOODDetector.from_method_name(model, 'MSP_Baseline')
         detector = UnifiedOODDetector.from_method_name(model, 'Energy_Hybrid_ConfRaw')
-        detector = UnifiedOODDetector.from_method_name(model, 'MaxLogit_Hybrid_NoWeight')
+        detector = UnifiedOODDetector.from_method_name(model, 'MaxLogit_Hybrid_UniformSum')
     """
     
     VALID_METHODS = ['msp', 'energy', 'maxlogit', 'lts', 'react', 'scale', 'ash_s', 'odin', 'entropy']
-    VALID_MODES = ['baseline', 'hybrid_noweight', 'hybrid_conf_raw', 'hybrid_conf_normalized']
+    VALID_MODES = ['baseline', 'hybrid_uniform_sum', 'hybrid_uniform_average', 'hybrid_conf_raw', 'hybrid_conf_normalized']
     
     # Method name to config 매핑
     METHOD_NAME_MAPPING = {
         # Baseline으로 끝나는 경우
         'baseline': 'baseline',
         # Hybrid로 시작하는 경우
-        'noweight': 'hybrid_noweight',
+        'uniformsum': 'hybrid_uniform_sum',
+        'uniformaverage': 'hybrid_uniform_average',
         'confraw': 'hybrid_conf_raw',
         'confnormalized': 'hybrid_conf_normalized',
     }
@@ -73,7 +75,7 @@ class UnifiedOODDetector(BaseOODDetector):
             device: 디바이스 ('cuda' or 'cpu')
             config: 설정 딕셔너리
                 - method: OOD 방법론 ('msp', 'energy', 'maxlogit')
-                - mode: 동작 모드 ('baseline', 'hybrid_noweight', 'hybrid_conf_raw', 'hybrid_conf_normalized')
+                - mode: 동작 모드 ('baseline', 'hybrid_uniform_sum', 'hybrid_uniform_average', 'hybrid_conf_raw', 'hybrid_conf_normalized')
                 - temperature: Energy용 temperature 파라미터 (기본값: 1.0)
         """
         super().__init__(model, device)
@@ -105,7 +107,7 @@ class UnifiedOODDetector(BaseOODDetector):
         
         Method name 형식:
             - {Method}_{Mode}
-            - 예: MSP_Baseline, Energy_Hybrid_ConfRaw, MaxLogit_Hybrid_NoWeight
+            - 예: MSP_Baseline, Energy_Hybrid_ConfRaw, MaxLogit_Hybrid_UniformSum
         
         Args:
             model: 모델 인스턴스
@@ -118,7 +120,7 @@ class UnifiedOODDetector(BaseOODDetector):
         Examples:
             >>> detector = UnifiedOODDetector.from_method_name(model, "MSP_Baseline")
             >>> detector = UnifiedOODDetector.from_method_name(model, "Energy_Hybrid_ConfRaw")
-            >>> detector = UnifiedOODDetector.from_method_name(model, "MaxLogit_Hybrid_NoWeight")
+            >>> detector = UnifiedOODDetector.from_method_name(model, "MaxLogit_Hybrid_UniformSum")
         """
         config = cls.parse_method_name(method_name)
         return cls(model, device=device, config=config)
@@ -144,8 +146,8 @@ class UnifiedOODDetector(BaseOODDetector):
             >>> UnifiedOODDetector.parse_method_name("Energy_Hybrid_ConfRaw")
             {'method': 'energy', 'mode': 'hybrid_conf_raw', 'temperature': 1.0}
             
-            >>> UnifiedOODDetector.parse_method_name("MaxLogit_Hybrid_NoWeight")
-            {'method': 'maxlogit', 'mode': 'hybrid_noweight'}
+            >>> UnifiedOODDetector.parse_method_name("MaxLogit_Hybrid_UniformSum")
+            {'method': 'maxlogit', 'mode': 'hybrid_uniform_sum'}
         """
         # Method name을 언더스코어로 분리
         parts = method_name.split('_')
@@ -166,11 +168,13 @@ class UnifiedOODDetector(BaseOODDetector):
         if len(mode_parts) == 1 and mode_parts[0].lower() == 'baseline':
             mode = 'baseline'
         elif len(mode_parts) >= 2 and mode_parts[0].lower() == 'hybrid':
-            # Hybrid_NoWeight, Hybrid_ConfRaw, Hybrid_ConfNormalized
-            mode_suffix = ''.join(mode_parts[1:]).lower()  # "noweight", "confraw", "confnormalized"
+            # Hybrid_UniformSum, Hybrid_UniformAverage, Hybrid_ConfRaw, Hybrid_ConfNormalized
+            mode_suffix = ''.join(mode_parts[1:]).lower()  # "uniformsum", "uniformaverage", "confraw", "confnormalized"
             
-            if mode_suffix == 'noweight':
-                mode = 'hybrid_noweight'
+            if mode_suffix == 'uniformsum':
+                mode = 'hybrid_uniform_sum'
+            elif mode_suffix == 'uniformaverage':
+                mode = 'hybrid_uniform_average'
             elif mode_suffix == 'confraw':
                 mode = 'hybrid_conf_raw'
             elif mode_suffix == 'confnormalized':
@@ -299,9 +303,13 @@ class UnifiedOODDetector(BaseOODDetector):
         modalities = ['RGB', 'Gyro', 'Acce']
         
         # Logit level fusion: main + auxiliary
-        if self.mode == 'hybrid_noweight':
-            # No weight: main (가중치 1) + auxiliary (가중치 1씩)
-            fused_logits = self._fuse_logits_noweight(main_logits, auxiliary_logits, modalities)
+        if self.mode == 'hybrid_uniform_sum':
+            # Uniform sum: main (1) + auxiliary (1:1:1) — 각 모달리티 가중치 1
+            fused_logits = self._fuse_logits_uniform_sum(main_logits, auxiliary_logits, modalities)
+        
+        elif self.mode == 'hybrid_uniform_average':
+            # Uniform average: main(1) + auxiliary(각 1/N), N=모달리티 개수
+            fused_logits = self._fuse_logits_uniform_average(main_logits, auxiliary_logits, modalities)
         
         elif self.mode == 'hybrid_conf_raw':
             # Raw confidence: main (가중치 1) + auxiliary (raw confidence로 가중)
@@ -321,9 +329,11 @@ class UnifiedOODDetector(BaseOODDetector):
         # Fused logits에서 OOD score 계산
         return self._compute_scores_from_logits(fused_logits)
     
-    def _fuse_logits_noweight(self, main_logits, auxiliary_logits, modalities):
+    def _fuse_logits_uniform_sum(self, main_logits, auxiliary_logits, modalities):
         """
-        Main logits + Auxiliary logits를 균등 가중치로 fusion
+        Main logits + Auxiliary logits를 균등 가중치(1:1:1)로 합산
+        
+        fused = main + aux_RGB + aux_Gyro + aux_Acce (각 가중치 1)
         
         Args:
             main_logits: tensor [batch, num_classes] - 가중치 1
@@ -346,6 +356,26 @@ class UnifiedOODDetector(BaseOODDetector):
         # 가중합 (가중치 모두 1): [batch, num_classes]
         weights = torch.ones(logits_stacked.size(0), device=logits_stacked.device)
         fused_logits = (logits_stacked * weights.view(-1, 1, 1)).sum(dim=0)
+        
+        return fused_logits
+    
+    def _fuse_logits_uniform_average(self, main_logits, auxiliary_logits, modalities):
+        """
+        Main logits (가중치 1) + Auxiliary logits (각 1/N, N=모달리티 개수)
+        
+        fused = main * 1 + aux_RGB * (1/3) + aux_Gyro * (1/3) + aux_Acce * (1/3)
+        → main은 1, 각 모달리티는 1/3 가중치
+        """
+        # Main logits (가중치 1)로 시작
+        fused_logits = main_logits * 1.0
+        
+        # Auxiliary logits: 각 모달리티 가중치 1/N (N = 모달리티 개수)
+        num_modalities = len([m for m in modalities if m in auxiliary_logits])
+        if num_modalities > 0:
+            weight = 1.0 / num_modalities
+            for modality in modalities:
+                if modality in auxiliary_logits:
+                    fused_logits = fused_logits + auxiliary_logits[modality] * weight
         
         return fused_logits
     
@@ -411,40 +441,41 @@ class UnifiedOODDetector(BaseOODDetector):
             conf_stacked = torch.stack(conf_list, dim=0)
             # Stack: [num_modalities, batch, num_classes]
             aux_logits_stacked = torch.stack(aux_logits_list, dim=0)
-            
-        # Softmax로 confidence 정규화 (dim=0: 모달리티 차원에서 합=1)
-        normalized_weights = torch.softmax(conf_stacked, dim=0)  # [num_modalities, batch]
 
-        # ─── [α-Diag] modality weight 분포 진단 로깅 ────────────────────
-        # 전체 실행 중 1회만 출력 (배치마다 반복 방지)
-        if not getattr(self, '_alpha_logged', False):
-            w_np = normalized_weights.detach().cpu().numpy()  # [M, B]
-            modality_names = ['RGB', 'Gyro', 'Acce']
-            logging.info("=" * 60)
-            logging.info("[α-Diag] Modality Weight (α_m) Distribution")
-            logging.info(f"  shape: {w_np.shape}  (modalities x batch)")
-            for i, mod in enumerate(modality_names[:w_np.shape[0]]):
-                w_i = w_np[i]
+            # Softmax로 confidence 정규화 (dim=0: 모달리티 차원에서 합=1)
+            normalized_weights = torch.softmax(conf_stacked, dim=0)  # [num_modalities, batch]
+
+            # ─── [α-Diag] modality weight 분포 진단 로깅 ────────────────────
+            # 전체 실행 중 1회만 출력 (배치마다 반복 방지)
+            if not getattr(self, '_alpha_logged', False):
+                w_np = normalized_weights.detach().cpu().numpy()  # [M, B]
+                modality_names = ['RGB', 'Gyro', 'Acce']
+                logging.info("=" * 60)
+                logging.info("[α-Diag] Modality Weight (α_m) Distribution")
+                logging.info(f"  shape: {w_np.shape}  (modalities x batch)")
+                for i, mod in enumerate(modality_names[:w_np.shape[0]]):
+                    w_i = w_np[i]
+                    logging.info(
+                        f"  α_{mod}: mean={w_i.mean():.4f}, std={w_i.std():.4f}, "
+                        f"min={w_i.min():.4f}, max={w_i.max():.4f}"
+                    )
+                per_sample_std = w_np.std(axis=0)  # [B]: 샘플별 3 modality weight의 std
                 logging.info(
-                    f"  α_{mod}: mean={w_i.mean():.4f}, std={w_i.std():.4f}, "
-                    f"min={w_i.min():.4f}, max={w_i.max():.4f}"
+                    f"  per-sample std(α_RGB,α_Gyro,α_Acce): "
+                    f"mean={per_sample_std.mean():.4f}, max={per_sample_std.max():.4f}"
                 )
-            per_sample_std = w_np.std(axis=0)  # [B]: 샘플별 3 modality weight의 std
-            logging.info(
-                f"  per-sample std(α_RGB,α_Gyro,α_Acce): "
-                f"mean={per_sample_std.mean():.4f}, max={per_sample_std.max():.4f}"
-            )
-            logging.info(
-                f"  → uniform 기준: std≈0.0000  |  "
-                f"완전 one-hot 기준: std≈{((2/3)**0.5)/3:.4f}"
-            )
-            logging.info("=" * 60)
-            self._alpha_logged = True
-        # ──────────────────────────────────────────────────────────────────            # 가중합 계산
+                logging.info(
+                    f"  → uniform 기준: std≈0.0000  |  "
+                    f"완전 one-hot 기준: std≈{((2/3)**0.5)/3:.4f}"
+                )
+                logging.info("=" * 60)
+                self._alpha_logged = True
+
+            # 가중합 계산
             for i in range(len(aux_logits_list)):
                 weighted_logits = aux_logits_stacked[i] * normalized_weights[i].unsqueeze(-1)
                 fused_logits = fused_logits + weighted_logits
-        
+
         return fused_logits
     
     # ----------------------------------------------------------------------------------
@@ -629,9 +660,11 @@ class UnifiedOODDetector(BaseOODDetector):
         if not auxiliary_logits:
             raise ValueError(f"Hybrid mode requires 'auxiliary_logits'.")
 
-        if self.mode in ['hybrid_noweight', 'hybrid_lts_scorefusion', 'hybrid_lts_featurefusion']:
-            # LTS 하이브리드 모드들도 Logit은 noweight 방식으로 퓨전
-            return self._fuse_logits_noweight(main_logits, auxiliary_logits, modalities)
+        if self.mode in ['hybrid_uniform_sum', 'hybrid_uniform_average', 'hybrid_lts_scorefusion', 'hybrid_lts_featurefusion']:
+            # LTS 하이브리드 모드들도 Logit은 uniform_sum 방식으로 퓨전
+            if self.mode == 'hybrid_uniform_average':
+                return self._fuse_logits_uniform_average(main_logits, auxiliary_logits, modalities)
+            return self._fuse_logits_uniform_sum(main_logits, auxiliary_logits, modalities)
         elif self.mode == 'hybrid_conf_raw':
             if not confidences: 
                 raise ValueError(f"Mode '{self.mode}' requires 'confidences'.")
@@ -759,8 +792,10 @@ class UnifiedOODDetector(BaseOODDetector):
         # Mode 부분
         if self.mode == 'baseline':
             mode_part = 'Baseline'
-        elif self.mode == 'hybrid_noweight':
-            mode_part = 'Hybrid_NoWeight'
+        elif self.mode == 'hybrid_uniform_sum':
+            mode_part = 'Hybrid_UniformSum'
+        elif self.mode == 'hybrid_uniform_average':
+            mode_part = 'Hybrid_UniformAverage'
         elif self.mode == 'hybrid_conf_raw':
             mode_part = 'Hybrid_ConfRaw'
         elif self.mode == 'hybrid_conf_normalized':

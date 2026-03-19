@@ -1,0 +1,59 @@
+# TBN-MAND (All) Method with mand_fusion
+name: 'Evaluate Hyperparameters of TBN-MAND-(alpha-temp-aux) (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
+project: 'Experimental Results on the MMEA-OWCL (CL Training & Evaluation)'
+entity: 'mmea-owcl'
+
+method: grid # or random, bayes
+metric:
+  goal: maximize
+  name: Task/avg_acc
+program: main.py
+
+parameters:
+  dataset:
+    values: ['mmea']
+  train_list:
+    values: ['mydataset_total_train.txt']
+  model_name:
+    values: ['tbn_mand']
+  workers:
+    values: [4]
+  epochs:
+    values: [50]
+
+  # ---------------------------
+  # Incremental Learning Config
+  # ---------------------------
+  exemplar_selection:
+    values: ['herding']
+  modality:
+    values: [['RGB', 'Gyro', 'Acce']]
+  fusion_type:
+    values: ['mand_fusion']
+  pretrain_epochs:
+    values: [50]
+  confidence_method:
+    values: ['energy']
+  energy_norm_method:
+    values: ["zscore"]
+  mode:
+    values: ['train']
+  increment:
+    values: [8, 4, 2]
+  enable_ood:
+    values: [false]
+  weights_path:
+    values: [null]
+  seed:
+    values: [1993, 1994, 1995, 1996, 1997]
+  experiment_suffix:
+    values: ["train"]
+  # ---------------------------
+  # 🔹 Hyperparameters to Sweep: λ (morst_lambda), β (morst_beta)
+  # MAND: mand.py — morst_beta(β), morst_lambda(λ). Temperature 없음.
+  # baseline_tbn/fusion: aux_loss_weight 또는 morst_lambda 사용
+  # ---------------------------
+  morst_lambda:
+    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+  morst_beta:
+    values: [0.005, 0.01, 0.02, 0.05, 0.1]
