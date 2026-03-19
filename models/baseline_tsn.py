@@ -25,7 +25,7 @@ class TSNBaseline(nn.Module):
         self.fusion_type = args["fusion_type"]  # e.g., 'attention', 'concat'
         self.dropout = args["dropout"]
         self.confidence_method = args.get("confidence_method", "max_prob")  # Confidence 계산 방법
-        self.aux_loss_weight = args.get("aux_loss_weight", 0.5)  # Auxiliary loss 가중치
+        self.aux_loss_weight = args.get("morst_lambda", args.get("aux_loss_weight", 0.5))  # λ
         
         self.fusion_networks = nn.ModuleList()
         self.fc_list = nn.ModuleList()
@@ -43,7 +43,7 @@ class TSNBaseline(nn.Module):
             num_segments=self.num_segments,
             pretrain_epochs=args.get("pretrain_epochs", None),  # Auxiliary head pretrain epochs (JSON에서 설정 가능)
             confidence_method=args.get("confidence_method", "max_prob"),  # Confidence 계산 방법 (JSON에서 설정 가능)
-            aux_loss_weight=args.get("aux_loss_weight", 0.5)  # Auxiliary loss 가중치 (JSON에서 설정 가능)
+            aux_loss_weight=args.get("morst_lambda", args.get("aux_loss_weight", 0.5))  # λ
         )
 
         # Set feature dimension for classifier
