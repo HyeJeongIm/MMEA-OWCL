@@ -1117,17 +1117,13 @@ class MMEABaseLearner(BaseLearner):
         else:
             logging.warning("⚠️  No class means found in checkpoint - NME evaluation will be unavailable")
 
-        # # ── [Step 1.6] Memory buffer 복원 (energy stats 계산용) ──────────
-        # if 'data_memory' in checkpoint and 'targets_memory' in checkpoint:
-        #     self._data_memory = checkpoint['data_memory']
-        #     self._targets_memory = checkpoint['targets_memory']
-        #     logging.info(f"[MemoryLoad] Restored {len(self._data_memory)} memory samples from checkpoint")
-        # if 'auxiliary_logits_memory' in checkpoint:
-        #     self._auxiliary_logits_memory = checkpoint['auxiliary_logits_memory']
-        #     logging.info(f"[MemoryLoad] Restored auxiliary logits memory from checkpoint")
-        # else:
-        #     logging.info("[MemoryLoad] No memory data in checkpoint (Task 0 or legacy checkpoint) – will build memory if needed")
-        # # ─────────────────────────────────────────────────────────────────
+        # ── MoAS energy stats 복원 ────────────────────────────────────────
+        if 'energy_stats' in checkpoint:
+            fusion = getattr(self._network, 'fusion', None) or getattr(self._network, 'fusion_network', None)
+            if fusion is not None and hasattr(fusion, 'set_energy_stats'):
+                fusion.set_energy_stats(checkpoint['energy_stats'])
+                logging.info(f"[MemoryLoad] ✅ Energy stats restored from checkpoint: {list(checkpoint['energy_stats'].keys())}")
+        # ─────────────────────────────────────────────────────────────────
 
         self._network.eval()
         return checkpoint
@@ -1169,9 +1165,10 @@ class MMEABaseLearner(BaseLearner):
         self._update_classifier(self._total_classes)
         
         # Load checkpoint with correct classifier size
-        self.load_checkpoint(checkpoint_path)
+        checkpoint = self.load_checkpoint(checkpoint_path)
+        energy_stats_loaded = 'energy_stats' in checkpoint
 
-        # ─── [α-Diag] task별 energy 로깅 플래그 리셋 ──────────────────
+        # ─── task별 energy 로깅 플래그 리셋 ────────────────────────────
         fusion = getattr(self._network, 'fusion', None)
         if fusion is not None:
             for mod in ['RGB', 'Gyro', 'Acce']:
@@ -1182,28 +1179,23 @@ class MMEABaseLearner(BaseLearner):
         self._network = self._network.to(self._device)
 
         # Setup data loaders for evaluation
-        # ※ build_rehearsal_memory 보다 먼저 실행해야 train_loader가 준비됨
         self._setup_data_loaders_with_ood(data_manager)
 
-        # 🔍 DEBUG: Check if test_loader is properly set
         if hasattr(self, 'test_loader') and self.test_loader is not None:
             logging.info(f"✅ test_loader properly set with {len(self.test_loader.dataset)} samples")
         else:
             logging.error("❌ test_loader is not set properly!")
             raise AttributeError("test_loader was not set up correctly")
 
-        # ── [Step 1.6] Memory buffer 구성 ────────────────────────────────
-        # inference_mode에서 build_rehearsal_memory()가 호출되지 않으므로
-        # _setup_data_loaders_with_ood() 이후에 직접 실행하여 memory를 구성한다.
-        # ※ memory 구성 시점 = train 종료 직후
-        
-        self.build_rehearsal_memory(data_manager, self.samples_per_class)
-        logging.info(f"[MemoryBuild] ✅ Memory built: {len(self._data_memory)} samples")
-        # ─────────────────────────────────────────────────────────────────
-
-        # ── [Step 1.6] Modality별 energy 통계 계산 (Z-score 정규화용) ──
-        # 모든 task에서 memory buffer를 사용하여 energy mean/std 계산
-        self._compute_energy_stats_from_memory(data_manager)
+        # ── Energy stats: checkpoint에 있으면 재계산 생략 ──────────────
+        if energy_stats_loaded:
+            logging.info("[EnergyStats] ✅ Loaded from checkpoint — skipping build_rehearsal_memory")
+        else:
+            # Fallback: legacy checkpoint (no energy_stats) → rebuild memory and recompute
+            logging.info("[EnergyStats] Not in checkpoint — rebuilding memory to compute stats")
+            self.build_rehearsal_memory(data_manager, self.samples_per_class)
+            logging.info(f"[MemoryBuild] Memory built: {len(self._data_memory)} samples")
+            self._compute_energy_stats_from_memory(data_manager)
         # ────────────────────────────────────────────────────────────────
         
         # Perform evaluation

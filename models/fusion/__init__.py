@@ -11,7 +11,7 @@ from .auxiliary_head_fusion_v2_3 import AuxiliaryHeadFusionV2_3
 from .auxiliary_head_fusion_v2_4 import AuxiliaryHeadFusionV2_4
 from .auxiliary_head_fusion_v2_5 import AuxiliaryHeadFusionV2_5
 from .auxiliary_head_fusion_v2_6 import AuxiliaryHeadFusionV2_6
-from .auxiliary_head_fusion_v2_7 import AuxiliaryHeadFusionV2_7
+from .mand_fusion import MANDFusion
 from .auxiliary_head_fusion_v2_8 import AuxiliaryHeadFusionV2_8
 from .auxiliary_head_fusion_v2_9 import AuxiliaryHeadFusionV2_9
 from .auxiliary_head_fusion_v2_10 import AuxiliaryHeadFusionV2_10
@@ -116,19 +116,19 @@ def get_fusion(midfusion, feature_dim, modality, dropout, num_segments=None, sha
             aux_loss_weight=aux_loss_weight,
         )
     
-    elif midfusion == "auxiliary_head_v2_7":
-        return AuxiliaryHeadFusionV2_7(
-            feature_dim=feature_dim, 
-            modality=modality, 
-            dropout=dropout, 
+    elif midfusion == "mand_fusion":
+        return MANDFusion(
+            feature_dim=feature_dim,
+            modality=modality,
+            dropout=dropout,
             num_classes=num_classes or 100,
-            confidence_method=confidence_method,  # JSON에서 설정 가능 (기본값: max_prob)
+            confidence_method=confidence_method,
             consensus_type=consensus_type,
             before_softmax=before_softmax,
             num_segments=num_segments or 8,
-            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,  # JSON에서 설정 가능 (기본값 5)
+            pretrain_epochs=pretrain_epochs if pretrain_epochs is not None else 5,
             aux_loss_weight=aux_loss_weight,
-            energy_norm_method=energy_norm_method,  # JSON에서 설정 가능 (기본값: zscore)
+            energy_norm_method=energy_norm_method,
         )
     
     elif midfusion == "auxiliary_head_v2_8":

@@ -52,7 +52,7 @@ def train(args):
     
     # Determine if exemplar_selection should be included in the directory structure
     model_name_lower = args['model_name'].lower()
-    exemplar_models = ('replay', 'foster', 'mmeader')
+    exemplar_models = ('replay', 'foster', 'mmeader', 'mand')
     if any(name in model_name_lower for name in exemplar_models):
         exemplar_selection = args.get('exemplar_selection', 'herding')
     else:
@@ -258,29 +258,24 @@ def _run_training_mode(args, model, data_manager, weights_dir, all_cl_results):
 
 def _get_checkpoint_path(weights_dir, model, args, task_id):
     """
-    🎯 체크포인트 경로를 모델 타입에 따라 반환
-    MMEADER 모델의 경우 파라미터별 서브디렉토리를 포함한 경로 반환
+    체크포인트 경로를 모델 타입에 따라 반환.
+    MAND 모델의 경우 β·λ 파라미터별 서브디렉토리를 포함한 경로를 반환.
     """
-    # MMEADER 모델인지 확인
-    if hasattr(model, 'mmeader_alpha'):
-        # MMEADER 파라미터 정보 가져오기
-        alpha = model.mmeader_alpha
-        aux_weight = args.get("aux_loss_weight", 0.5)
+    # MAND 모델인지 확인 (morst_beta attribute)
+    if hasattr(model, 'morst_beta'):
+        beta = model.morst_beta
+        lambda_val = args.get("morst_lambda", args.get("aux_loss_weight", 0.5))
+        param_subdir = f"beta{beta}_lambda{lambda_val}"
+        mand_weights_dir = os.path.join(weights_dir, param_subdir)
 
-        # 파라미터별 서브디렉토리 경로 생성
-        param_subdir = f"alpha{alpha}_aux{aux_weight}"
-        mmeader_weights_dir = os.path.join(weights_dir, param_subdir)
-        
-        # 서브디렉토리가 존재하는지 확인
-        if os.path.exists(mmeader_weights_dir):
-            checkpoint_path = os.path.join(mmeader_weights_dir, f"task_{task_id}_checkpoint_{task_id}.pkl")
-            logging.info(f"🎯 MMEADER: Using parameter-specific directory: {param_subdir}")
+        if os.path.exists(mand_weights_dir):
+            checkpoint_path = os.path.join(mand_weights_dir, f"task_{task_id}_checkpoint_{task_id}.pkl")
+            logging.info(f"[MAND] Using parameter-specific directory: {param_subdir}")
             return checkpoint_path
         else:
-            logging.warning(f"⚠️  MMEADER parameter directory not found: {mmeader_weights_dir}")
-            logging.warning(f"    Falling back to base weights_dir")
-    
-    # 일반 모델 또는 서브디렉토리를 찾지 못한 경우 기본 경로 사용
+            logging.warning(f"[MAND] Parameter directory not found: {mand_weights_dir}, falling back to base dir")
+
+    # Default: base weights_dir
     checkpoint_path = os.path.join(weights_dir, f"task_{task_id}_checkpoint_{task_id}.pkl")
     return checkpoint_path
 

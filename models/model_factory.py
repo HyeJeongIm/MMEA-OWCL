@@ -10,7 +10,7 @@ from models.cmr_mfn import CMR_MFN
 from models.replay import TBN_Replay
 from models.der import TBN_DER, TSN_DER
 from models.foster import TBN_FOSTER, TSN_FOSTER
-from models.mmeader import TBN_MMEADER, TSN_MMEADER
+from models.mand import TBN_MAND, TSN_MAND
 from models.upperbound import TBN_UpperBound
 
 def get_model(model_name, args):
@@ -33,8 +33,8 @@ def get_model(model_name, args):
         'tsn_der': TSN_DER,
         'tbn_foster': TBN_FOSTER,
         'tsn_foster': TSN_FOSTER,
-        'tbn_mmeader': TBN_MMEADER,
-        'tsn_mmeader': TSN_MMEADER,
+        'tbn_mand': TBN_MAND,
+        'tsn_mand': TSN_MAND,
         'tbn_upperbound': TBN_UpperBound,
     }
 

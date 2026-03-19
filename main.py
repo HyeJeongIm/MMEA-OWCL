@@ -37,12 +37,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--dataset', type=str, required=True, help='데이터셋 이름 (예: mmea)')
     parser.add_argument('-m', '--model_name', type=str, required=True, help='모델/실험 이름 (exps/exp_<name>.json)')
-    parser.add_argument('-f', '--fusion_type', type=str, 
-                        choices=['concat', 'imu_cosine_gate', 'imu_euclidean_gate', 'imu_kl_gate', 'imu_entropy_gate', 'hierarchical_gating', 'hierarchical_concat', 'auxiliary_head', 'auxiliary_head_v2', 'auxiliary_head_v2_3', 'auxiliary_head_v2_4', 'auxiliary_head_v2_5','auxiliary_head_v2_6', 'auxiliary_head_v2_7', 'auxiliary_head_v2_8', 'auxiliary_head_v2_9', 'auxiliary_head_v2_10', 'gated_cross_modal', 'attention', 'cross_attention'],
-                        help='Fusion 방법 선택 (JSON 설정을 덮어씀)')
-    parser.add_argument('-c', '--confidence', type=str, 
-                        choices=['entropy', 'max_prob', 'energy', 'margin', 'variance', 'doctor'],
-                        help='Confidence 계산 방법 (auxiliary_head_v2_7/8/9에서 사용, JSON 설정을 덮어씀)')
+    parser.add_argument('-f', '--fusion_type', type=str,
+                        help='Fusion 방법 선택 (JSON 설정을 덮어씀, 예: mand_fusion, concat, attention)')
+    parser.add_argument('-c', '--confidence', type=str,
+                        help='Confidence 계산 방법 (JSON 설정을 덮어씀, 예: energy, max_prob, entropy)')
     parser.add_argument('-g', '--device', type=int, nargs='+',
                         help='GPU device ID(s) 선택 (예: --device 0 또는 -g 0, JSON 설정을 덮어씀)')
     parser.add_argument('--wandb_project', type=str, default='MMEA-OWCL_hj_test')
