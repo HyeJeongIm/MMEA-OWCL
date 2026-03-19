@@ -45,7 +45,7 @@
     "LTS_Acce_Only",
     "LTS_Late_Fusion"
   ],
-  "weights_path": "/workspace/MMEA-OWCL/weights/mmea_tbn_tbn_replay_auxiliary_head_v2_4_rgbgyroacce_ep50_bs8_pb1_fr0_inc8_mem320_train/Oct04_14-18-23",
+  "weights_path": "",
   "seed": 1993,
   "device": [
     1
