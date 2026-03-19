@@ -262,14 +262,13 @@ def _get_checkpoint_path(weights_dir, model, args, task_id):
     MMEADER 모델의 경우 파라미터별 서브디렉토리를 포함한 경로 반환
     """
     # MMEADER 모델인지 확인
-    if hasattr(model, 'mmeader_alpha') and hasattr(model, 'mmeader_temp'):
+    if hasattr(model, 'mmeader_alpha'):
         # MMEADER 파라미터 정보 가져오기
         alpha = model.mmeader_alpha
-        temp = int(model.mmeader_temp)
         aux_weight = args.get("aux_loss_weight", 0.5)
-        
+
         # 파라미터별 서브디렉토리 경로 생성
-        param_subdir = f"alpha{alpha}_temp{temp}_aux{aux_weight}"
+        param_subdir = f"alpha{alpha}_aux{aux_weight}"
         mmeader_weights_dir = os.path.join(weights_dir, param_subdir)
         
         # 서브디렉토리가 존재하는지 확인

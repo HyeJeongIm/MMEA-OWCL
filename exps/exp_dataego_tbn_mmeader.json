@@ -49,7 +49,6 @@
     "use_wandb": true,
     "debug_mode": false,
 
-    "mmeader_alpha": 0.3,
-    "mmeader_temp": 6.0
+    "mmeader_alpha": 0.08
 }
 

@@ -105,7 +105,7 @@ class AuxiliaryHeadFusionV2_7(nn.Module):
         
         # ── [Step 1.6] Modality별 energy 통계 (Z-score 정규화용) ────────
         # {modality_name: (mean: float, std: float)} 형태로 저장
-        # mmeabase의 _compute_energy_stats_from_loader() 에서 채워짐
+        # mmeabase의 _compute_energy_stats_from_memory() 에서 채워짐
         self._energy_stats = {}  # e.g. {'RGB': (-1.5, 1.2), 'Gyro': (-5.8, 0.7)}
         
         # TBN consensus

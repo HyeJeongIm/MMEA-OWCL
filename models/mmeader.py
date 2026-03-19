@@ -46,12 +46,10 @@ class MMEADER(Replay):
         
         # 🎯 DER 하이퍼파라미터
         self.mmeader_alpha = args.get("mmeader_alpha", 0.5)  # DER loss weight
-        self.mmeader_temp = args.get("mmeader_temp", 4.0)     # Temperature for distillation
-        
         # 🎯 Auxiliary logits 메모리 (모달리티별 보조 헤드 로짓을 dictionary로 저장)
         self._auxiliary_logits_memory = defaultdict(lambda: np.array([]))
-        
-        logging.info(f"🎯 MMEADER initialized with alpha={self.mmeader_alpha}, temperature={self.mmeader_temp}")
+
+        logging.info(f"🎯 MMEADER initialized with alpha={self.mmeader_alpha}")
     
     def incremental_train(self, data_manager):
         """Override incremental_train to store old predictions"""
@@ -790,17 +788,13 @@ class MMEADER(Replay):
             # mask: 0이 아닌 경우만 loss 계산
             mask = (old_aux != 0).float()
             
-            # Temperature scaling
-            old_aux_scaled = old_aux / self.mmeader_temp
-            current_aux_scaled = current_aux / self.mmeader_temp
-            
             # Masked loss
-            masked_current = current_aux_scaled * mask
+            masked_current = current_aux * mask
             
             # MSE loss 계산
             modality_loss = F.mse_loss(
                 masked_current[valid_mask],
-                old_aux_scaled[valid_mask]
+                old_aux[valid_mask]
             )
             
             total_loss = total_loss + self.mmeader_alpha * modality_loss
@@ -827,8 +821,6 @@ class MMEADER(Replay):
             return torch.tensor(0.0, device=self._device)
 
         mask = (old_aux_concat != 0).float()
-        old_aux_concat = old_aux_concat / self.mmeader_temp
-        current_aux_concat = current_aux_concat / self.mmeader_temp
         masked_current = current_aux_concat * mask
         return self.mmeader_alpha * F.mse_loss(
             masked_current[valid_mask],
@@ -983,11 +975,10 @@ class MMEADER(Replay):
         
         # 🎯 MMEADER 파라미터 정보를 경로에 반영
         alpha = self.mmeader_alpha
-        temp = int(self.mmeader_temp)
         aux_weight = self.args.get("aux_loss_weight", 0.5)
         
         # 파라미터 정보를 포함한 서브디렉토리 생성
-        param_subdir = f"alpha{alpha}_temp{temp}_aux{aux_weight}"
+        param_subdir = f"alpha{alpha}_aux{aux_weight}"
         weights_dir = os.path.join(weights_dir, param_subdir)
         os.makedirs(weights_dir, exist_ok=True)
         logging.info(f"🎯 MMEADER: Saving to parameter-specific directory: {param_subdir}")
