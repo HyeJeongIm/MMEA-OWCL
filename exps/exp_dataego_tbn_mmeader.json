@@ -2,7 +2,7 @@
     "dataset": "dataego",
     "modality": ["RGB", "Gyro", "Acce"],
     "model_name": "tbn_mmeader",
-    "exemplar_selection": "reservoir",
+    "exemplar_selection": "herding",
     
     "backbone": "tbn",
     "arch": "BNInception",
@@ -32,35 +32,14 @@
     
     "pretrain_epochs": 50,
     "confidence_method": "energy",
+    "energy_norm_method": "zscore",
     "aux_loss_weight": 0.3,
     "partialbn": true,
     "freeze": false,
     
-    "mode": "train",
-    "enable_ood": false,
-    "ood_methods": [
-      "MSP_Baseline",
-      "MaxLogit_Baseline",
-      "Energy_Baseline",
-      "Entropy_Baseline",
-      "ODIN_Baseline",
-      "MSP_Hybrid_NoWeight",
-      "MaxLogit_Hybrid_NoWeight",
-      "Energy_Hybrid_NoWeight",
-      "Entropy_Hybrid_NoWeight",
-      "ODIN_Hybrid_NoWeight",
-      "MSP_Hybrid_ConfRaw",
-      "MaxLogit_Hybrid_ConfRaw",
-      "Energy_Hybrid_ConfRaw",
-      "Entropy_Hybrid_ConfRaw",
-      "ODIN_Hybrid_ConfRaw",
-      "MSP_Hybrid_ConfNormalized",
-      "MaxLogit_Hybrid_ConfNormalized",
-      "Energy_Hybrid_ConfNormalized",
-      "Entropy_Hybrid_ConfNormalized",
-      "ODIN_Hybrid_ConfNormalized",
-      "LTS_Baseline"
-    ],
+    "mode": "eval",
+    "enable_ood": true,
+    "ood_methods": ["Energy_Hybrid_ConfNormalized", "MaxLogit_Hybrid_ConfNormalized"],
     "weights_path": "",
   
     "seed": 1993,
@@ -70,6 +49,6 @@
     "use_wandb": true,
     "debug_mode": false,
 
-    "mmeader_alpha": 0.2
+    "mmeader_alpha": 0.08
 }
 

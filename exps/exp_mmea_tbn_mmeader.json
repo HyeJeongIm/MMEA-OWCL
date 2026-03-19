@@ -32,6 +32,7 @@
   
   "pretrain_epochs": 50,
   "confidence_method": "energy",
+  "energy_norm_method": "zscore",
   "aux_loss_weight": 0.5,
   "partialbn": true,
   "freeze": false,
@@ -48,6 +49,5 @@
   "use_wandb": true,
   "debug_mode": false,
 
-  "mmeader_alpha": 0.3,
-  "mmeader_temp": 6.0
+  "mmeader_alpha": 0.3
 }
