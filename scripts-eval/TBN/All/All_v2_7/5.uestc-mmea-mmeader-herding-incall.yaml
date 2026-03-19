@@ -88,8 +88,6 @@ parameters:
   # 🔹 Reduced Hyperparameters to Sweep
   # ---------------------------
   mmeader_alpha:
-    values: [0.3]       # DER weight
-  mmeader_temp:
-    values: [6]                # Distillation temperature
+    values: [0.08]       # DER weight
   aux_loss_weight:
     values: [0.5]       # Auxiliary loss weight
