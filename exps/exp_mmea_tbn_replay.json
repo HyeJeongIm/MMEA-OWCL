@@ -5,7 +5,7 @@
   
   "backbone": "tbn",
   "arch": "BNInception",
-  "fusion_type": "auxiliary_head_v2_7",
+  "fusion_type": "concat",
   "consensus_type": "avg",
   "before_softmax": true,
   
@@ -49,7 +49,7 @@
     "MaxLogit_Baseline"
 
   ],
-  "weights_path": "weights/mmea_tbn_replay_auxiliary_head_v2_7_rgbgyroacce_ep50_bs8_pb1_fr0_inc4_mem320_train/Oct11_22-25-22",
+  "weights_path": "",
   "seed": 1993,
   "device": [0],
   "prefix": "mmea-owcl",

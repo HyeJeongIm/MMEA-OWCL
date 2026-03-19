@@ -6,11 +6,11 @@ Usage:
     python main.py -d mmea -m tbn_replay
     
     # Short options 사용 (빠르고 편리!)
-    python main.py -d mmea -m tbn_replay -f auxiliary_head_v2_8 -c energy -g 0
-    python main.py -d mmea -m tbn_replay -f auxiliary_head_v2_7 -c max_prob -g 1
+    python main.py -d mmea -m tbn_replay -f concat
+    python main.py -d mmea -m tbn_mand -f mand_fusion -c energy 
     
     # Long options 사용 (명확함)
-    python main.py -d mmea -m tbn_replay --confidence energy --device 0
+    python main.py -d mmea -m tbn_mand --fusion mand_fusion --confidence energy --device 0
     
     # Multi-GPU
     python main.py -d mmea -m tbn_replay -g 0 1
