@@ -10,8 +10,8 @@
   "consensus_type": "avg",
   "before_softmax": true,
 
-  "train_list": "mydataset_total_train.txt",
-  "test_list": "mydataset_test.txt",
+  "train_list": "mmea_train.txt",
+  "test_list": "mmea_val.txt",
   "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
 
   "num_segments": 8,

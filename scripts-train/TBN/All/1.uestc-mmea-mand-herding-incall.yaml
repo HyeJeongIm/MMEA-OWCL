@@ -1,5 +1,6 @@
 # TBN-MAND (All) Method with mand_fusion
-name: 'Evaluate Hyperparameters of TBN-MAND-(alpha-temp-aux) (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
+# 하이퍼파라미터 탐색: train=mmea_train.txt,  validation=mmea_val.txt (test 미사용)
+name: 'Evaluate Hyperparameters of TBN-MAND-(lambda-beta) (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
 project: 'Experimental Results on the MMEA-OWCL (CL Training & Evaluation)'
 entity: 'mmea-owcl'
 
@@ -13,7 +14,9 @@ parameters:
   dataset:
     values: ['mmea']
   train_list:
-    values: ['mydataset_total_train.txt']
+    values: ['mmea_train.txt']
+  test_list:
+    values: ['mmea_val.txt']
   model_name:
     values: ['tbn_mand']
   workers:
@@ -39,13 +42,13 @@ parameters:
   mode:
     values: ['train']
   increment:
-    values: [8, 4, 2]
+    values: [4, 2]
   enable_ood:
     values: [false]
   weights_path:
     values: [null]
   seed:
-    values: [1993, 1994, 1995, 1996, 1997]
+    values: [1993]
   experiment_suffix:
     values: ["train"]
   # ---------------------------
