@@ -29,6 +29,148 @@ EPSILON = 1e-8
 batch_size = 64
 
 
+# =============================================================================
+# [Logit-Diag] logit → energy → delta → r_m → α 전체 흐름 출력 유틸
+# =============================================================================
+
+def _diag_energy_and_weights(aux_logits: dict, labels: torch.Tensor,
+                              task_id: int = 0,
+                              n_samples_per_class: int = 3, log_file: str = None):
+    """
+    Task 0에서 logit → energy → delta 전체 계산 흐름을 출력.
+
+    출력 구조:
+      PART 1. 샘플별 전체 흐름 (클래스당 n_samples_per_class개)
+              logit 벡터 → energy → E_mean → delta
+      PART 2. 클래스별 평균 요약 (energy / delta)
+
+    Args:
+        log_file: 파일 경로 (str|None). 지정하면 stdout 출력과 동시에 파일에 append.
+    """
+    import os
+
+    if not aux_logits:
+        return
+
+    mods = list(aux_logits.keys())
+    N    = aux_logits[mods[0]].shape[0]
+    T    = 1.0
+
+    # ── 출력 헬퍼: stdout + 파일 동시 기록 ──────────────────────────────────
+    _buf = []
+    def emit(s=""):
+        print(s)
+        _buf.append(s + "\n")
+
+    def flush_to_file():
+        if log_file and _buf:
+            os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.writelines(_buf)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── 에너지 [N] per modality ────────────────────────────────────────────
+    energy = {m: -torch.logsumexp(aux_logits[m].float(), dim=1) for m in mods}
+    E_stack = torch.stack([energy[m] for m in mods], dim=0)  # [M, N]
+    E_mean  = E_stack.mean(dim=0)                            # [N]
+
+    BAR = "═" * 110
+    SEP = "─" * 110
+    emit(f"\n{BAR}")
+    emit(f"  [Logit-Diag]  Task {task_id}  │  N={N} samples  │  modalities={mods}  │  T={T}")
+    emit(BAR)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PART 1. 샘플별 전체 흐름
+    # ══════════════════════════════════════════════════════════════════════
+    emit(f"\n{'─'*40}  PART 1. 샘플별 전체 계산 흐름  {'─'*40}")
+    emit(f"  (클래스당 {n_samples_per_class}개 샘플 출력)\n")
+
+    unique_cls = labels.unique().sort().values.tolist()
+    for cls_id in unique_cls:
+        indices = (labels == int(cls_id)).nonzero(as_tuple=True)[0]
+        pick    = indices[:n_samples_per_class]
+
+        emit(f"  ┌─ Class {int(cls_id):>3}  ({len(indices)} samples total) " + "─" * 60)
+        for idx in pick:
+            i = idx.item()
+            emit(f"  │  Sample #{i}")
+
+            # ① logit 벡터
+            for m in mods:
+                logit_vec = aux_logits[m][i].float()
+                vals = "  ".join(f"{v:+.3f}" for v in logit_vec.tolist())
+                emit(f"  │    logit [{m:>5}] = [{vals}]")
+
+            # ② energy
+            e_vals = {m: energy[m][i].item() for m in mods}
+            e_str  = "   ".join(f"E_{m}={e_vals[m]:+.4f}" for m in mods)
+            e_mean = E_mean[i].item()
+            emit(f"  │    {e_str}   →  E_mean={e_mean:+.4f}")
+            emit(f"  │    ↑ E = -logsumexp(logit)  낮을수록 확실")
+
+            # ③ delta
+            delta = {m: (e_vals[m] - e_mean) / T for m in mods}
+            d_str = "   ".join(f"Δ_{m}={delta[m]:+.4f}" for m in mods)
+            emit(f"  │    {d_str}")
+            emit(f"  │    ↑ Δ = (E_m - E_mean) / T   음수=평균보다 확실  양수=평균보다 불확실")
+
+            # ④ high_sigmoid r_m → α
+            emit(f"  │")
+            emit(f"  │    {'method':<14}  " +
+                 "  ".join(f"r_{m:<5}" for m in mods) + "   │  " +
+                 "  ".join(f"α_{m:<5}" for m in mods) + "   dominant")
+            emit(f"  │    {'─'*14}  " + "  ".join("─" * 9 for _ in mods) +
+                 "   │  " + "  ".join("─" * 9 for _ in mods))
+            r = torch.tensor([torch.sigmoid(torch.tensor(delta[m])).item() for m in mods])
+            alpha = torch.softmax(r, dim=0)
+            dominant = mods[alpha.argmax().item()]
+            r_str = "  ".join(f"{r[j]:+.4f}   " for j in range(len(mods)))
+            a_str = "  ".join(f"{alpha[j]:.4f}   " for j in range(len(mods)))
+            emit(f"  │    {'high_sigmoid':<14}  {r_str}│  {a_str}← {dominant}")
+
+            emit(f"  │")
+        emit(f"  └{'─'*107}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PART 2. 클래스별 평균 요약
+    # ══════════════════════════════════════════════════════════════════════
+    emit(f"\n{'─'*40}  PART 2. 클래스별 평균 요약  {'─'*40}\n")
+
+    # 헤더
+    mw = 10
+    emit(f"  {'cls':>5}  {'N':>5}  " +
+         "  ".join(f"{'E_'+m:>{mw}}" for m in mods))
+    emit("  " + SEP[:90])
+
+    for cls_id in unique_cls:
+        mask  = (labels == int(cls_id))
+        n_cls = mask.sum().item()
+        e_cls = {m: energy[m][mask].mean().item() for m in mods}
+
+        e_str = "  ".join(f"{e_cls[m]:>{mw}.4f}" for m in mods)
+        emit(f"  {int(cls_id):>5}  {n_cls:>5}  {e_str}")
+
+    emit()
+    emit(f"  [high_sigmoid]")
+    for cls_id in unique_cls:
+        mask  = (labels == int(cls_id))
+        e_cls = {m: energy[m][mask].mean().item() for m in mods}
+        mean_e = sum(e_cls[m] for m in mods) / len(mods)
+        r = torch.tensor([torch.sigmoid(torch.tensor(e_cls[m] - mean_e)).item() for m in mods])
+        alpha = torch.softmax(r, dim=0)
+        dominant = mods[alpha.argmax().item()]
+        a_str = "  ".join(f"α_{mods[j]}={alpha[j]:.4f}" for j in range(len(mods)))
+        emit(f"    cls {int(cls_id):>3}:  {a_str}   ← {dominant}")
+    emit()
+
+    emit(f"{BAR}\n")
+    flush_to_file()
+
+
+# =============================================================================
+
+
 class MMEABaseLearner(BaseLearner):
     def __init__(self, args):
         super().__init__(args)
@@ -661,8 +803,15 @@ class MMEABaseLearner(BaseLearner):
         
         if need_auxiliary_outputs:
             print("  🔥 UnifiedOODDetector Hybrid methods detected - collecting auxiliary outputs...")
+            if hasattr(self._network, '_diag_phase'):
+                self._network._diag_phase = 'ID'
             id_auxiliary_outputs = self._collect_outputs(self.test_loader)
+            if hasattr(self._network, '_diag_phase'):
+                self._network._diag_phase = 'OOD'
+                self._network._logit_diag_ood_shown = 0
             ood_auxiliary_outputs = self._collect_outputs(self.ood_test_loader)
+            if hasattr(self._network, '_diag_phase'):
+                self._network._diag_phase = 'ID'
             
             if id_auxiliary_outputs is not None and ood_auxiliary_outputs is not None:
                 print(f"  ✅ Auxiliary outputs collected:")
@@ -702,6 +851,16 @@ class MMEABaseLearner(BaseLearner):
                             log_dict[f"alpha_diag/{mod}_std"]  = float(a.std())
                         log_dict["alpha_diag/per_sample_std_mean"] = float(per_sample_std.mean())
                         wandb.log(log_dict, step=self._cur_task)
+                # ──────────────────────────────────────────────────────────────
+
+                # ─── [Logit-Diag] 클래스별 energy + 4가지 방법 α 비교 출력 ──
+                if self.args.get('debug_mode', False):
+                    _diag_energy_and_weights(
+                        aux_logits=id_auxiliary_outputs.get('auxiliary_logits', {}),
+                        labels=self._collect_labels(self.test_loader),
+                        task_id=self._cur_task,
+                        log_file=self.args.get('diag_log_path', None),
+                    )
                 # ──────────────────────────────────────────────────────────────
             else:
                 print(f"  ❌ ERROR: Auxiliary outputs not available!")
@@ -1196,8 +1355,6 @@ class MMEABaseLearner(BaseLearner):
             self.build_rehearsal_memory(data_manager, self.samples_per_class)
             logging.info(f"[MemoryBuild] Memory built: {len(self._data_memory)} samples")
             self._compute_energy_stats_from_memory(data_manager)
-        # ────────────────────────────────────────────────────────────────
-        
         # Perform evaluation
         if self.enable_ood:
             # Perform both CL and OOD evaluation
@@ -1240,6 +1397,14 @@ class MMEABaseLearner(BaseLearner):
             del self._cached_ood_data
         logging.info("🧹 Cleared cached feature data to free memory")
     
+    def _collect_labels(self, loader) -> torch.Tensor:
+        """DataLoader에서 전체 레이블을 수집합니다 (_diag_energy_and_weights용)."""
+        all_labels = []
+        for batch in loader:
+            _, targets = batch[0], batch[1]
+            all_labels.append(targets)
+        return torch.cat(all_labels, dim=0)
+
     def _collect_outputs(self, loader):
         """
         모델의 전체 outputs를 수집 (auxiliary_logits, confidences, modality_weights 포함)
@@ -1270,9 +1435,10 @@ class MMEABaseLearner(BaseLearner):
                         inputs[m] = inputs[m].to(self._device)
                 else:
                     inputs = inputs.to(self._device)
-                
+                targets = targets.to(self._device)
+
                 # Forward pass
-                outputs = self._network(inputs)
+                outputs = self._network(inputs, targets=targets)
                 
                 # Check if this is auxiliary head fusion
                 if 'auxiliary_logits' not in outputs or not outputs['auxiliary_logits']:

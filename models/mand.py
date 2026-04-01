@@ -56,11 +56,14 @@ class MAND(Replay):
         # β — distillation weight for L_KD  (paper name: morst_beta)
         self.morst_beta = args.get("morst_beta", 0.08)
 
+        # MoRST 활성화 여부 (wo_morst ablation용)
+        self.morst_enabled = args.get("morst_enabled", True)
+
         # z̃_m buffer: stored modality logits per exemplar
         # {modality: np.ndarray [N, C]}
         self._modality_logits_memory = defaultdict(lambda: np.array([]))
 
-        logging.info(f"[MAND] Initialized: β={self.morst_beta}")
+        logging.info(f"[MAND] Initialized: β={self.morst_beta}, morst_enabled={self.morst_enabled}")
 
     # ------------------------------------------------------------------
     # Incremental training entry point
@@ -85,8 +88,11 @@ class MAND(Replay):
 
         # Store old modality logits for replay (MoRST KD)
         if self._cur_task > 0 and hasattr(self, "_data_memory") and self._data_memory.size > 0:
-            logging.info("[MAND] Setting up MoRST train loaders with stored modality logits...")
-            self._setup_morst_train_loaders(data_manager)
+            if self.morst_enabled:
+                logging.info("[MAND] Setting up MoRST train loaders with stored modality logits...")
+                self._setup_morst_train_loaders(data_manager)
+            else:
+                logging.info("[MAND w/o MoRST] Skipping MoRST KD — using basic replay (no modality logits)")
 
         self._train(self.train_loader, self.test_loader)
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
@@ -794,7 +800,7 @@ class MAND(Replay):
                     inputs[m] = inputs[m].to(self._device)
                 targets = targets.to(self._device)
 
-                outputs = self._network(inputs)
+                outputs = self._network(inputs, targets=targets)
                 if "confidences" not in outputs or not outputs["confidences"]:
                     continue
 

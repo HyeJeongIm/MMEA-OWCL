@@ -47,6 +47,9 @@ def main():
     parser.add_argument('--wandb_entity', type=str, default='mmea-owcl')
     parser.add_argument('--debug_mode', action='store_true',
                         help='디버그 모드: 학습 스텝 축소 + W&B 비활성')
+    parser.add_argument('--diag_log', type=str, default=None,
+                        help='[Logit-Diag] 로그를 저장할 파일 경로 (예: logs/diag_run1.log). '
+                             'debug_mode와 함께 사용. 지정하지 않으면 stdout만 출력.')
     args, _ = parser.parse_known_args()
 
     # ------------- 2) 설정 JSON 로드 (exps/exp_<model>.json) -------------
@@ -73,6 +76,9 @@ def main():
         pass
     
     # None 값은 JSON 설정을 덮어쓰지 않도록 제외
+    # diag_log → diag_log_path 로 저장
+    if args_dict.get('diag_log') is not None:
+        args_dict['diag_log_path'] = args_dict.pop('diag_log')
     config.update({k: v for k, v in args_dict.items() if v is not None})
 
     # ------------- 4) 런 메타 정보 주입 (run_id/시간/호스트/GPU/W&B사용여부) -------------

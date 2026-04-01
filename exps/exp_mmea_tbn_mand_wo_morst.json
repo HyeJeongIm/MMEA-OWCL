@@ -1,0 +1,54 @@
+{
+  "dataset": "mmea",
+  "modality": ["RGB", "Gyro", "Acce"],
+  "model_name": "tbn_mand_wo_morst",
+  "exemplar_selection": "herding",
+
+  "backbone": "tbn",
+  "arch": "BNInception",
+  "fusion_type": "mand_fusion",
+  "consensus_type": "avg",
+  "before_softmax": true,
+
+  "train_list": "mmea_train_total.txt",
+  "test_list": "mmea_test.txt",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+
+  "num_segments": 8,
+  "batch_size": 8,
+  "workers": 4,
+  "dropout": 0.5,
+
+  "lr": 0.001,
+  "lr_steps": [10, 20],
+  "momentum": 0.9,
+  "weight_decay": 0.0005,
+  "epochs": 50,
+  "clip_gradient": 20,
+
+  "memory_size": 320,
+  "increment": 2,
+  "shuffle": false,
+
+  "pretrain_epochs": 50,
+  "confidence_method": "energy",
+  "energy_norm_method": "zscore",
+  "conf_sigmoid_temperature": 1.0,
+  "morst_lambda": 0.4,
+  "morst_beta": 0.005,
+  "morst_enabled": false,
+  "partialbn": true,
+  "freeze": false,
+
+  "experiment_suffix": "wo_morst",
+
+  "mode": "train",
+  "enable_ood": false,
+  "weights_path": null,
+
+  "seed": 1993,
+  "prefix": "mmea-owcl",
+  "log_test_acc": false,
+  "use_wandb": true,
+  "debug_mode": false
+}

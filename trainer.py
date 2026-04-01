@@ -74,10 +74,20 @@ def train(args):
     if mode == 'eval':
         # eval 모드: results/ 폴더 안에 실험 디렉토리 생성
         os.makedirs(results_dir, exist_ok=True)
-        
+
         print(f"✓ [EVAL] 실험 디렉토리 생성: {experiment_dir}")
         print(f"✓ [EVAL] 결과 저장 경로: {results_dir}")
         print(f"✓ [EVAL] 모델 가중치 로드 경로: {weights_dir}")
+
+        # [Logit-Diag] eval 모드 시 diag_log_path 자동 설정
+        # 명시적으로 지정된 경우 그대로 사용, 없으면 results_dir 아래 자동 생성
+        if not args.get('diag_log_path'):
+            seed  = args.get('seed', 0)
+            inc   = args.get('increment', 0)
+            args['diag_log_path'] = os.path.join(
+                results_dir, f"diag_logit_inc{inc}_seed{seed}.log"
+            )
+            print(f"✓ [Logit-Diag] 로그 저장 경로: {args['diag_log_path']}")
         
         # train 모드에서는 파일 로깅도 포함
         log_name = f"eval_{args['prefix']}_{args['seed']}_{args['model_name']}_" \
@@ -532,6 +542,12 @@ def _log_final_summary(cl_results, nb_tasks, ood_results=None):
                         logging.info("📊 Logging all final OOD metrics to wandb in a single step...")
                         wandb.log(all_final_metrics)
                         logging.info(f"✅ Logged {len(all_final_metrics)} final metrics to wandb")
+
+                        # [Logit-Diag] diag 로그 파일을 W&B Files 탭에 업로드
+                        diag_path = args.get('diag_log_path')
+                        if diag_path and os.path.exists(diag_path):
+                            wandb.save(diag_path, base_path=os.path.dirname(diag_path), policy="now")
+                            logging.info(f"✅ [Logit-Diag] 로그 파일 W&B 업로드: {diag_path}")
                 except:
                     pass
             

@@ -4550,7 +4550,8 @@
 ./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/25_type_phone/25_type_phone_2022_04_23_15_55_34 427 427 24
 ./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/25_type_phone/25_type_phone_2022_04_23_16_02_57 426 426 24
 ./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/25_type_phone/25_type_phone_2022_05_26_20_15_00 417 417 24
-./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/25_type_phone/25_type_phone_2022_04_29_09_16_06 414 415 24./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/27_open_close_door/27_open_close_door_2022_04_29_13_04_21 333 333 26
+./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/25_type_phone/25_type_phone_2022_04_29_09_16_06 414 415 24
+./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/27_open_close_door/27_open_close_door_2022_04_29_13_04_21 333 333 26
 ./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/27_open_close_door/27_open_close_door_2022_04_28_10_27_55 409 409 26
 ./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/27_open_close_door/27_open_close_door_2022_05_05_16_02_17 415 415 26
 ./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/data/27_open_close_door/27_open_close_door_2022_05_05_17_02_37 413 413 26

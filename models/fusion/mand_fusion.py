@@ -16,7 +16,7 @@ Single fusion module that implements both components of MAND:
       E_m(x) = -log Σ_c exp(z_{m,c})          (Eq. 1)
       r_m(x) = -(E_m(x) - μ_m) / σ_m          (Eq. 2)
       α_m(x) = exp(r_m) / Σ_j exp(r_j)        (Eq. 3)
-      z^MoAS = z_main + Σ_m α_m · z_m         (Eq. 4)
+      z^MoAS = z_main + Σ_m α_m · z_m         (Eq. 4)  ← Approach A (기존)
       s(x)   = max_c z^MoAS                    (Eq. 5)
 
 Interface compatibility with mmeabase.py / baseline_tbn.py:
@@ -79,7 +79,13 @@ class MANDFusion(nn.Module):
             before_softmax:     whether logits are pre-softmax
             num_segments:       number of TBN segments
             pretrain_epochs:    epochs per task to train modality heads
-            energy_norm_method: energy normalisation ('zscore', 'e_uniform', 'raw')
+            energy_norm_method:       energy normalisation method:
+                                        - 'zscore'       : r_m = -(E_m - μ_m) / σ_m  (MoAS Eq.2)
+                                        - 'e_uniform'    : r_m = sigmoid(-(E_m - E_uniform))
+                                        - 'raw'          : r_m = sigmoid(-E_m)
+                                        - 'high_sigmoid' : r_m = sigmoid(+delta)
+                                                           delta = E_m - E_mean
+                                                           high-energy(불확실한) modality에 높은 가중치.
         """
         super().__init__()
 
@@ -241,11 +247,20 @@ class MANDFusion(nn.Module):
 
         When confidence_method == 'energy' and energy_norm_method == 'zscore',
         returns r_m = -(E_m - μ_m) / σ_m  (Eq. 2) — exactly what MoAS uses.
+
+        Note: 'high_sigmoid'은 모든 modality의 E_m이 모인 뒤 E_mean을 계산해야 하므로
+              이 함수에서 처리하지 않고 forward() / moas_score()에서 후처리합니다.
+              해당 method일 경우 이 함수는 placeholder를 반환하며,
+              이후 후처리 블록에서 reliability_dict가 override됩니다.
         """
         if self.confidence_method == "energy":
             energy = -torch.logsumexp(logits, dim=1)  # E_m (Eq. 1)
 
-            if self.energy_norm_method == "zscore":
+            if self.energy_norm_method == "high_sigmoid":
+                # 후처리에서 override되므로 placeholder 반환
+                return torch.zeros(logits.size(0), device=logits.device)
+
+            elif self.energy_norm_method == "zscore":
                 stats = self._energy_stats.get(modality_name) if modality_name else None
                 if stats is not None:
                     e_mean, e_std = stats
@@ -309,9 +324,18 @@ class MANDFusion(nn.Module):
                 continue
             z_m = modality_logits[m]
             energy = -torch.logsumexp(z_m, dim=1)              # E_m (Eq. 1)
-            reliability = self._compute_confidence(z_m, m)     # r_m (Eq. 2)
             energy_dict[m] = energy
-            reliability_dict[m] = reliability
+            reliability_dict[m] = self._compute_confidence(z_m, m)  # r_m (Eq. 2)
+
+        # ── high_sigmoid: E_mean 기반 reliability 재계산 ─────────────────────
+        # delta = E_m - E_mean  (T=1)
+        # r_m = sigmoid(+delta) : high-energy modality에 높은 가중치
+        if self.confidence_method == "energy" and self.energy_norm_method == "high_sigmoid" and energy_dict:
+            mods = list(energy_dict.keys())
+            E_mean = torch.stack([energy_dict[m] for m in mods], dim=0).mean(dim=0)
+            for m in mods:
+                delta = energy_dict[m] - E_mean
+                reliability_dict[m] = torch.sigmoid(delta)
 
         # No valid modalities: return main logits unchanged
         if not reliability_dict:
@@ -323,13 +347,14 @@ class MANDFusion(nn.Module):
                 "energy_scores": {},
             }
 
+        # ── Approach A (기존): α_m = softmax({r_m}),  z^MoAS = z_main + Σ α_m·z_m ──
         # α_m = softmax({r_m})  (Eq. 3)
         modalities = list(reliability_dict.keys())
         r_stack = torch.stack([reliability_dict[m] for m in modalities], dim=1)  # [B, M]
         alpha_stack = F.softmax(r_stack, dim=1)                                  # [B, M]
         weights = {m: alpha_stack[:, i] for i, m in enumerate(modalities)}
 
-        # z^MoAS = z_main + Σ_m α_m · z_m  (Eq. 4)
+        # z^MoAS = z_main + Σ_m α_m · z_m  (Eq. 4, Approach A)
         combined = z_main.clone()
         for m, alpha in weights.items():
             z_m = modality_logits[m]
@@ -429,6 +454,18 @@ class MANDFusion(nn.Module):
                     auxiliary_logits[m] = z_m
                     confidences[m] = self._compute_confidence(z_m, modality_name=m)
 
+        # ── high_sigmoid: E_mean 기반 confidence 후처리 ──────────────────────
+        # delta = E_m - E_mean  (T=1)
+        # r_m = sigmoid(+delta) : high-energy modality에 높은 가중치
+        if self.confidence_method == "energy" and self.energy_norm_method == "high_sigmoid" and auxiliary_logits:
+            mods = list(auxiliary_logits.keys())
+            E_mean = torch.stack(
+                [-torch.logsumexp(auxiliary_logits[m], dim=1) for m in mods], dim=0
+            ).mean(dim=0)
+            for m in mods:
+                E_m = -torch.logsumexp(auxiliary_logits[m], dim=1)
+                confidences[m] = torch.sigmoid(E_m - E_mean)
+
         # ── Uniform 1:1:1 feature fusion → fc1 → ReLU → dropout ──────────
         weighted_features = [modality_features[m] for m in self.modality if m in modality_features]
         x = torch.cat(weighted_features, dim=1)
@@ -438,7 +475,7 @@ class MANDFusion(nn.Module):
 
         # ── MoRST head supervision loss  (1/|M|) Σ_m L_CE(z_m, y) ───────
         auxiliary_loss = None
-        if is_pretrain and targets is not None and auxiliary_logits:
+        if is_pretrain and self.training and targets is not None and auxiliary_logits:
             auxiliary_loss = sum(
                 F.cross_entropy(z_m, targets) for z_m in auxiliary_logits.values()
             ) / len(auxiliary_logits)

@@ -35,6 +35,7 @@ def get_model(model_name, args):
         'tsn_foster': TSN_FOSTER,
         'tbn_mand': TBN_MAND,
         'tsn_mand': TSN_MAND,
+        'tbn_mand_wo_morst': TBN_MAND,
         'tbn_upperbound': TBN_UpperBound,
     }
 
