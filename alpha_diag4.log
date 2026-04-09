@@ -1,0 +1,900 @@
+Debug mode enabled: running only a few forward steps per epoch with W&B disabled.
+============================================================
+🚀 Multi-Modal Open World Continual Learning
+============================================================
+✓ Dataset      : mmea
+✓ Model        : tbn_mand
+✓ Fusion Type  : mand_fusion
+✓ Modalities   : ['RGB', 'Gyro', 'Acce']
+✓ Tasks        : Initial 2 + 2 each increment
+✓ Confidence   : energy
+✓ Device(s)    : [0]
+✓ OOD Methods  : ['MaxLogit_Hybrid_ConfNormalized']
+✓ Use W&B      : False
+============================================================
+✓ [EVAL] 실험 디렉토리 생성: mmea_tbn_mand_mand_fusion_rgbgyroacce_ep50_bs8_pb1_fr0_inc2_mem320_train/herding/seed_1993
+✓ [EVAL] 결과 저장 경로: logs/mmea_tbn_mand_mand_fusion_rgbgyroacce_ep50_bs8_pb1_fr0_inc2_mem320_train/herding/seed_1993/results
+✓ [EVAL] 모델 가중치 로드 경로: logs/mmea_tbn_mand_mand_fusion_rgbgyroacce_ep50_bs8_pb1_fr0_inc2_mem320_train/herding/seed_1993/weights
+2026-03-26 14:03:01,361 [allocate_device.py] => Using device cuda:1
+2026-03-26 14:03:01,361 [replay.py] => 🎯 Exemplar selection method: herding
+2026-03-26 14:03:01,361 [mand.py] => [MAND] Initialized: β=0.1
+Init Gyro model weight
+Done. Gyro model ready.
+Init Acce model weight
+Done. Acce model ready.
+
+
+🔍 BaselineTBN Debug:
+   Modality count: 3
+   Backbone feature_dim: 1024
+   After fusion feature_dim: 512
+🔧 Set fusion.num_segments = 8
+========================================
+✅ Baseline Model Configuration
+----------------------------------------
+  Backbone:        tbn
+  Fusion:          mand_fusion
+  Modality:        ['RGB', 'Gyro', 'Acce']
+  Segments:        8
+  Dropout:         0.5
+  Consensus:       avg
+========================================
+Freezing BatchNorm2D parameters except the first one.
+video number:5206
+video number:1316
+2026-03-26 14:03:01,708 [data_manager.py] => [26, 14, 23, 4, 11, 25, 31, 10, 29, 5, 6, 9, 17, 22, 2, 19, 13, 1, 21, 16, 8, 3, 27, 28, 15, 30, 0, 7, 12, 18, 20, 24]
+2026-03-26 14:03:01,718 [trainer.py] => === EVALUATION MODE ===
+
+Task 1/16 OOD 평가 시작
+2026-03-26 14:03:01,718 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:01,719 [mmeabase.py] => === Inference Mode: Task 0 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 2
+2026-03-26 14:03:01,719 [mand_fusion.py] => [MANDFusion] Modality heads updated: 2 → 2 classes
+2026-03-26 14:03:01,719 [baseline_tbn.py] => 🎯 Updated fusion auxiliary heads to 2 classes
+2026-03-26 14:03:01,719 [mmeabase.py] => Loading checkpoint from: logs/mmea_tbn_mand_mand_fusion_rgbgyroacce_ep50_bs8_pb1_fr0_inc2_mem320_train/herding/seed_1993/weights/beta0.1_lambda0.5/task_0_checkpoint_0.pkl
+2026-03-26 14:03:01,900 [mmeabase.py] => ✅ Model weights loaded successfully
+2026-03-26 14:03:01,900 [mmeabase.py] => ✅ Task info loaded: current task = 0
+2026-03-26 14:03:01,900 [mmeabase.py] => ✅ Class means loaded for 2 classes
+2026-03-26 14:03:01,900 [mand_fusion.py] => [MANDFusion] MoAS energy statistics injected:
+2026-03-26 14:03:01,900 [mand_fusion.py] =>   RGB: μ=-7.8174, σ=5.5572
+2026-03-26 14:03:01,900 [mand_fusion.py] =>   Gyro: μ=-1.8649, σ=0.7445
+2026-03-26 14:03:01,900 [mand_fusion.py] =>   Acce: μ=-0.6938, σ=0.0000
+2026-03-26 14:03:01,900 [mmeabase.py] => [MemoryLoad] ✅ Energy stats restored from checkpoint: ['RGB', 'Gyro', 'Acce']
+2026-03-26 14:03:01,937 [mmeabase.py] => Setting up data loaders for Task 0
+2026-03-26 14:03:01,938 [mmeabase.py] =>   ✅ OOD enabled. OOD classes: 2 ~ 31
+2026-03-26 14:03:01,938 [mmeabase.py] =>   📊 OOD test samples: 1233
+2026-03-26 14:03:01,938 [mmeabase.py] =>   📚 Train samples: 330
+2026-03-26 14:03:01,938 [mmeabase.py] =>   🧪 ID test samples: 83
+2026-03-26 14:03:01,938 [mmeabase.py] => ✅ test_loader properly set with 83 samples
+2026-03-26 14:03:01,938 [mmeabase.py] => [EnergyStats] ✅ Loaded from checkpoint — skipping build_rehearsal_memory
+2026-03-26 14:03:01,938 [mmeabase.py] => === Task 0 CL Evaluation ===
+2026-03-26 14:03:01,938 [mmeabase.py] => Known classes: 0-1
+Collecting confidences (TEST):   0%|          | 0/11 [00:00<?, ?it/s]
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+  [Logit-Diag] ◇ ID   Eval batch 0  │  B=8 (showing 8)  │  energy_norm_method=high_sigmoid  │  T=1.0
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+  ┌─ Sample  0  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+0.545  -0.566]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.532  -2.529]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+2.894  -2.884]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-0.8296   E_Gyro=-2.5381   E_Acce=-0.6938   →  E_mean=-1.3539
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=+0.5242   Δ_Gyro=-1.1842   Δ_Acce=+0.6600
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.6281        +0.2343        +0.6593        │  0.3695      0.2492      0.3812      Acce       ✗
+  │  low_linear        -0.5242        +1.1842        -0.6600        │  0.1353      0.7467      0.1181      Gyro      
+  │  high_linear       +0.5242        -1.1842        +0.6600        │  0.4298      0.0779      0.4923      Acce      
+  │  low_sigmoid       +0.3719        +0.7657        +0.3407        │  0.2897      0.4295      0.2808      Gyro      
+  │  high_sigmoid      +0.6281        +0.2343        +0.6593        │  0.3695      0.2492      0.3812      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  1  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.482  -3.497]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.812  -2.810]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.728  -6.717]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.4829   E_Gyro=-2.8158   E_Acce=-0.6938   →  E_mean=-2.3308
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.1521   Δ_Gyro=-0.4849   Δ_Acce=+1.6370
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2401        +0.3811        +0.8371        │  0.2520      0.2902      0.4578      Acce       ✗
+  │  low_linear        +1.1521        +0.4849        -1.6370        │  0.6351      0.3259      0.0390      RGB       
+  │  high_linear       -1.1521        -0.4849        +1.6370        │  0.0520      0.1014      0.8465      Acce      
+  │  low_sigmoid       +0.7599        +0.6189        +0.1629        │  0.4134      0.3590      0.2276      RGB       
+  │  high_sigmoid      +0.2401        +0.3811        +0.8371        │  0.2520      0.2902      0.4578      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  2  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+4.274  -4.286]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.323  -2.321]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+7.013  -7.000]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-4.2741   E_Gyro=-2.3325   E_Acce=-0.6938   →  E_mean=-2.4335
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.8406   Δ_Gyro=+0.1010   Δ_Acce=+1.7396
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1370        +0.5252        +0.8506        │  0.2214      0.3265      0.4521      Acce       ✗
+  │  low_linear        +1.8406        -0.1010        -1.7396        │  0.8537      0.1225      0.0238      RGB       
+  │  high_linear       -1.8406        +0.1010        +1.7396        │  0.0228      0.1589      0.8183      Acce      
+  │  low_sigmoid       +0.8630        +0.4748        +0.1494        │  0.4612      0.3128      0.2259      RGB       
+  │  high_sigmoid      +0.1370        +0.5252        +0.8506        │  0.2214      0.3265      0.4521      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  3  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+2.899  -2.909]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.741  -2.739]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+5.833  -5.826]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-2.9018   E_Gyro=-2.7452   E_Acce=-0.6938   →  E_mean=-2.1136
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-0.7882   Δ_Gyro=-0.6316   Δ_Acce=+1.4198
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.3126        +0.3472        +0.8053        │  0.2723      0.2819      0.4458      Acce       ✗
+  │  low_linear        +0.7882        +0.6316        -1.4198        │  0.5089      0.4351      0.0559      RGB       
+  │  high_linear       -0.7882        -0.6316        +1.4198        │  0.0888      0.1038      0.8074      Acce      
+  │  low_sigmoid       +0.6874        +0.6528        +0.1947        │  0.3881      0.3749      0.2371      RGB       
+  │  high_sigmoid      +0.3126        +0.3472        +0.8053        │  0.2723      0.2819      0.4458      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  4  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.416  -3.425]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.889  -2.886]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.571  -6.561]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.4166   E_Gyro=-2.8920   E_Acce=-0.6938   →  E_mean=-2.3341
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.0825   Δ_Gyro=-0.5578   Δ_Acce=+1.6403
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2530        +0.3640        +0.8376        │  0.2557      0.2857      0.4587      Acce       ✗
+  │  low_linear        +1.0825        +0.5578        -1.6403        │  0.6033      0.3570      0.0396      RGB       
+  │  high_linear       -1.0825        -0.5578        +1.6403        │  0.0558      0.0943      0.8498      Acce      
+  │  low_sigmoid       +0.7470        +0.6360        +0.1624        │  0.4078      0.3649      0.2273      RGB       
+  │  high_sigmoid      +0.2530        +0.3640        +0.8376        │  0.2557      0.2857      0.4587      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  5  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+2.740  -2.768]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+3.311  -3.308]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.366  -6.357]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-2.7438   E_Gyro=-3.3121   E_Acce=-0.6938   →  E_mean=-2.2499
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-0.4939   Δ_Gyro=-1.0622   Δ_Acce=+1.5561
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.3790        +0.2569        +0.8258        │  0.2900      0.2567      0.4533      Acce       ✗
+  │  low_linear        +0.4939        +1.0622        -1.5561        │  0.3455      0.6100      0.0445      Gyro      
+  │  high_linear       -0.4939        -1.0622        +1.5561        │  0.1071      0.0607      0.8322      Acce      
+  │  low_sigmoid       +0.6210        +0.7431        +0.1742        │  0.3611      0.4080      0.2310      Gyro      
+  │  high_sigmoid      +0.3790        +0.2569        +0.8258        │  0.2900      0.2567      0.4533      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  6  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.164  -3.192]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.201  -2.200]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+5.675  -5.665]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.1662   E_Gyro=-2.2136   E_Acce=-0.6938   →  E_mean=-2.0245
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.1417   Δ_Gyro=-0.1890   Δ_Acce=+1.3307
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2420        +0.4529        +0.7910        │  0.2521      0.3113      0.4365      Acce       ✗
+  │  low_linear        +1.1417        +0.1890        -1.3307        │  0.6802      0.2624      0.0574      RGB       
+Collecting confidences (TEST):   9%|▉         | 1/11 [00:01<00:13,  1.35s/it]  │  high_linear       -1.1417        -0.1890        +1.3307        │  0.0648      0.1679      0.7674      Acce      
+  │  low_sigmoid       +0.7580        +0.5471        +0.2090        │  0.4189      0.3392      0.2419      RGB       
+  │  high_sigmoid      +0.2420        +0.4529        +0.7910        │  0.2521      0.3113      0.4365      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  7  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+1.452  -1.483]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.830  -2.827]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+4.196  -4.184]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-1.5034   E_Gyro=-2.8331   E_Acce=-0.6938   →  E_mean=-1.6768
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=+0.1734   Δ_Gyro=-1.1563   Δ_Acce=+0.9829
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.5432        +0.2393        +0.7277        │  0.3401      0.2510      0.4090      Acce       ✗
+  │  low_linear        -0.1734        +1.1563        -0.9829        │  0.1914      0.7234      0.0852      Gyro      
+  │  high_linear       +0.1734        -1.1563        +0.9829        │  0.2848      0.0753      0.6399      Acce      
+  │  low_sigmoid       +0.4568        +0.7607        +0.2723        │  0.3138      0.4252      0.2609      Gyro      
+  │  high_sigmoid      +0.5432        +0.2393        +0.7277        │  0.3401      0.2510      0.4090      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+  [Logit-Diag] ◇ ID   Eval batch 1  │  B=8 (showing 8)  │  energy_norm_method=high_sigmoid  │  T=1.0
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+  ┌─ Sample  0  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.128  -3.126]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.454  -2.452]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+5.841  -5.830]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.1303   E_Gyro=-2.4618   E_Acce=-0.6938   →  E_mean=-2.0953
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.0350   Δ_Gyro=-0.3665   Δ_Acce=+1.4015
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2621        +0.4094        +0.8024        │  0.2581      0.2990      0.4430      Acce       ✗
+  │  low_linear        +1.0350        +0.3665        -1.4015        │  0.6250      0.3203      0.0547      RGB       
+  │  high_linear       -1.0350        -0.3665        +1.4015        │  0.0695      0.1357      0.7948      Acce      
+  │  low_sigmoid       +0.7379        +0.5906        +0.1976        │  0.4089      0.3529      0.2382      RGB       
+  │  high_sigmoid      +0.2621        +0.4094        +0.8024        │  0.2581      0.2990      0.4430      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  1  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+2.656  -2.675]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+1.266  -1.266]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+4.177  -4.167]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-2.6607   E_Gyro=-1.3429   E_Acce=-0.6938   →  E_mean=-1.5658
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.0949   Δ_Gyro=+0.2229   Δ_Acce=+0.8720
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2507        +0.5555        +0.7052        │  0.2543      0.3450      0.4007      Acce       ✗
+  │  low_linear        +1.0949        -0.2229        -0.8720        │  0.7104      0.1902      0.0994      RGB       
+  │  high_linear       -1.0949        +0.2229        +0.8720        │  0.0842      0.3143      0.6015      Acce      
+  │  low_sigmoid       +0.7493        +0.4445        +0.2948        │  0.4216      0.3108      0.2676      RGB       
+  │  high_sigmoid      +0.2507        +0.5555        +0.7052        │  0.2543      0.3450      0.4007      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  2  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+5.770  -5.781]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+1.930  -1.928]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+8.358  -8.338]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-5.7698   E_Gyro=-1.9506   E_Acce=-0.6938   →  E_mean=-2.8048
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-2.9650   Δ_Gyro=+0.8541   Δ_Acce=+2.1109
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.0490        +0.7014        +0.8920        │  0.1907      0.3662      0.4431      Acce       ✗
+  │  low_linear        +2.9650        -0.8541        -2.1109        │  0.9726      0.0213      0.0061      RGB       
+  │  high_linear       -2.9650        +0.8541        +2.1109        │  0.0048      0.2205      0.7747      Acce      
+  │  low_sigmoid       +0.9510        +0.2986        +0.1080        │  0.5125      0.2669      0.2206      RGB       
+  │  high_sigmoid      +0.0490        +0.7014        +0.8920        │  0.1907      0.3662      0.4431      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  3  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.564  -3.580]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.059  -2.058]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.098  -6.083]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.5651   E_Gyro=-2.0754   E_Acce=-0.6938   →  E_mean=-2.1114
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.4537   Δ_Gyro=+0.0360   Δ_Acce=+1.4176
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1894        +0.5090        +0.8050        │  0.2366      0.3256      0.4378      Acce       ✗
+  │  low_linear        +1.4537        -0.0360        -1.4176        │  0.7800      0.1758      0.0442      RGB       
+  │  high_linear       -1.4537        +0.0360        +1.4176        │  0.0433      0.1921      0.7646      Acce      
+  │  low_sigmoid       +0.8106        +0.4910        +0.1950        │  0.4411      0.3205      0.2384      RGB       
+  │  high_sigmoid      +0.1894        +0.5090        +0.8050        │  0.2366      0.3256      0.4378      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  4  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.650  -3.666]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.443  -2.441]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.289  -6.277]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.6509   E_Gyro=-2.4506   E_Acce=-0.6938   →  E_mean=-2.2651
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.3858   Δ_Gyro=-0.1855   Δ_Acce=+1.5713
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2001        +0.4538        +0.8280        │  0.2402      0.3096      0.4501      Acce       ✗
+  │  low_linear        +1.3858        +0.1855        -1.5713        │  0.7391      0.2225      0.0384      RGB       
+  │  high_linear       -1.3858        -0.1855        +1.5713        │  0.0424      0.1409      0.8166      Acce      
+  │  low_sigmoid       +0.7999        +0.5462        +0.1720        │  0.4330      0.3360      0.2311      RGB       
+  │  high_sigmoid      +0.2001        +0.4538        +0.8280        │  0.2402      0.3096      0.4501      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  5  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+2.648  -2.666]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+3.954  -3.948]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.700  -6.691]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-2.6534   E_Gyro=-3.9539   E_Acce=-0.6938   →  E_mean=-2.4337
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-0.2197   Δ_Gyro=-1.5202   Δ_Acce=+1.7399
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.4453        +0.1794        +0.8507        │  0.3061      0.2347      0.4592      Acce       ✗
+  │  low_linear        +0.2197        +1.5202        -1.7399        │  0.2078      0.7629      0.0293      Gyro      
+  │  high_linear       -0.2197        -1.5202        +1.7399        │  0.1195      0.0325      0.8480      Acce      
+  │  low_sigmoid       +0.5547        +0.8206        +0.1493        │  0.3366      0.4391      0.2244      Gyro      
+  │  high_sigmoid      +0.4453        +0.1794        +0.8507        │  0.3061      0.2347      0.4592      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  6  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+5.493  -5.495]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+0.857  -0.857]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.961  -6.941]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-5.4929   E_Gyro=-1.0223   E_Acce=-0.6938   →  E_mean=-2.4030
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-3.0899   Δ_Gyro=+1.3807   Δ_Acce=+1.7092
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.0435        +0.7991        +0.8467        │  0.1865      0.3971      0.4164      Acce       ✗
+  │  low_linear        +3.0899        -1.3807        -1.7092        │  0.9807      0.0112      0.0081      RGB       
+  │  high_linear       -3.0899        +1.3807        +1.7092        │  0.0048      0.4166      0.5786      Acce      
+  │  low_sigmoid       +0.9565        +0.2009        +0.1533        │  0.5215      0.2450      0.2336      RGB       
+  │  high_sigmoid      +0.0435        +0.7991        +0.8467        │  0.1865      0.3971      0.4164      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  7  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+4.616  -4.622]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.525  -2.522]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+7.835  -7.818]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-4.6158   E_Gyro=-2.5312   E_Acce=-0.6938   →  E_mean=-2.6136
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-2.0022   Δ_Gyro=+0.0824   Δ_Acce=+1.9198
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1190        +0.5206        +0.8721        │  0.2165      0.3236      0.4599      Acce       ✗
+  │  low_linear        +2.0022        -0.0824        -1.9198        │  0.8740      0.1087      0.0173      RGB       
+  │  high_linear       -2.0022        +0.0824        +1.9198        │  0.0168      0.1351      0.8481      Acce      
+  │  low_sigmoid       +0.8810        +0.4794        +0.1279        │  0.4673      0.3127      0.2200      RGB       
+  │  high_sigmoid      +0.1190        +0.5206        +0.8721        │  0.2165      0.3236      0.4599      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+  [Logit-Diag] ◇ ID   Eval batch 2  │  B=8 (showing 8)  │  energy_norm_method=high_sigmoid  │  T=1.0
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+  ┌─ Sample  0  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+4.294  -4.309]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.436  -2.434]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+7.393  -7.380]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-4.2941   E_Gyro=-2.4437   E_Acce=-0.6938   →  E_mean=-2.4772
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.8169   Δ_Gyro=+0.0335   Δ_Acce=+1.7834
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1398        +0.5084        +0.8561        │  0.2226      0.3218      0.4556      Acce       ✗
+  │  low_linear        +1.8169        -0.0335        -1.7834        │  0.8442      0.1327      0.0231      RGB       
+  │  high_linear       -1.8169        +0.0335        +1.7834        │  0.0227      0.1447      0.8326      Acce      
+  │  low_sigmoid       +0.8602        +0.4916        +0.1439        │  0.4587      0.3173      0.2241      RGB       
+  │  high_sigmoid      +0.1398        +0.5084        +0.8561        │  0.2226      0.3218      0.4556      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  1  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+4.852  -4.855]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.150  -2.148]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+7.632  -7.616]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-4.8521   E_Gyro=-2.1638   E_Acce=-0.6938   →  E_mean=-2.5699
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-2.2822   Δ_Gyro=+0.4061   Δ_Acce=+1.8761
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.0926        +0.6002        +0.8672        │  0.2070      0.3439      0.4491      Acce       ✗
+  │  low_linear        +2.2822        -0.4061        -1.8761        │  0.9228      0.0627      0.0144      RGB       
+  │  high_linear       -2.2822        +0.4061        +1.8761        │  0.0126      0.1846      0.8028      Acce      
+  │  low_sigmoid       +0.9074        +0.3998        +0.1328        │  0.4848      0.2918      0.2234      RGB       
+  │  high_sigmoid      +0.0926        +0.6002        +0.8672        │  0.2070      0.3439      0.4491      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  2  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.594  -3.610]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+0.408  -0.410]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+4.501  -4.484]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.5951   E_Gyro=-0.7737   E_Acce=-0.6938   →  E_mean=-1.6875
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.9076   Δ_Gyro=+0.9139   Δ_Acce=+0.9937
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1293        +0.7138        +0.7298        │  0.2166      0.3886      0.3949      Acce       ✗
+  │  low_linear        +1.9076        -0.9139        -0.9937        │  0.8973      0.0534      0.0493      RGB       
+  │  high_linear       -1.9076        +0.9139        +0.9937        │  0.0278      0.4667      0.5055      Acce      
+  │  low_sigmoid       +0.8707        +0.2862        +0.2702        │  0.4749      0.2647      0.2605      RGB       
+  │  high_sigmoid      +0.1293        +0.7138        +0.7298        │  0.2166      0.3886      0.3949      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  3  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+3.955  -3.961]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+0.528  -0.529]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+5.097  -5.078]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-3.9555   E_Gyro=-0.8264   E_Acce=-0.6938   →  E_mean=-1.8253
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-2.1302   Δ_Gyro=+0.9988   Δ_Acce=+1.1314
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1062        +0.7308        +0.7561        │  0.2091      0.3905      0.4005      Acce       ✗
+  │  low_linear        +2.1302        -0.9988        -1.1314        │  0.9241      0.0404      0.0354      RGB       
+  │  high_linear       -2.1302        +0.9988        +1.1314        │  0.0200      0.4575      0.5224      Acce      
+  │  low_sigmoid       +0.8938        +0.2692        +0.2439        │  0.4860      0.2602      0.2537      RGB       
+  │  high_sigmoid      +0.1062        +0.7308        +0.7561        │  0.2091      0.3905      0.4005      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  4  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+2.901  -2.917]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+2.057  -2.054]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+5.226  -5.214]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-2.9036   E_Gyro=-2.0733   E_Acce=-0.6938   →  E_mean=-1.8903
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-1.0133   Δ_Gyro=-0.1831   Δ_Acce=+1.1964
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.2663        +0.4544        +0.7679        │  0.2592      0.3128      0.4280      Acce       ✗
+  │  low_linear        +1.0133        +0.1831        -1.1964        │  0.6470      0.2820      0.0710      RGB       
+  │  high_linear       -1.0133        -0.1831        +1.1964        │  0.0806      0.1849      0.7345      Acce      
+  │  low_sigmoid       +0.7337        +0.5456        +0.2321        │  0.4108      0.3404      0.2488      RGB       
+  │  high_sigmoid      +0.2663        +0.4544        +0.7679        │  0.2592      0.3128      0.4280      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  5  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+4.233  -4.252]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+1.640  -1.639]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.221  -6.208]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-4.2328   E_Gyro=-1.6771   E_Acce=-0.6938   →  E_mean=-2.2012
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-2.0315   Δ_Gyro=+0.5241   Δ_Acce=+1.5074
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1159        +0.6281        +0.8187        │  0.2133      0.3560      0.4307      Acce       ✗
+  │  low_linear        +2.0315        -0.5241        -1.5074        │  0.9036      0.0702      0.0262      RGB       
+  │  high_linear       -2.0315        +0.5241        +1.5074        │  0.0207      0.2666      0.7127      Acce      
+  │  low_sigmoid       +0.8841        +0.3719        +0.1813        │  0.4775      0.2861      0.2365      RGB       
+  │  high_sigmoid      +0.1159        +0.6281        +0.8187        │  0.2133      0.3560      0.4307      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  6  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+4.185  -4.205]   argmax=0 (upstairs) ✓
+  │  aux logit [ Gyro] = [+1.627  -1.626]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+6.216  -6.201]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-4.1852   E_Gyro=-1.6652   E_Acce=-0.6938   →  E_mean=-2.1814
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-2.0038   Δ_Gyro=+0.5162   Δ_Acce=+1.4876
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.1188        +0.6263        +0.8157        │  0.2142      0.3558      0.4300      Acce       ✗
+  │  low_linear        +2.0038        -0.5162        -1.4876        │  0.9002      0.0724      0.0274      RGB       
+  │  high_linear       -2.0038        +0.5162        +1.4876        │  0.0216      0.2687      0.7097      Acce      
+  │  low_sigmoid       +0.8812        +0.3737        +0.1843        │  0.4762      0.2867      0.2372      RGB       
+  │  high_sigmoid      +0.1188        +0.6263        +0.8157        │  0.2142      0.3558      0.4300      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ┌─ Sample  7  label=0 (upstairs) ──────────────────────────────────────────────────────────────────────
+  │  aux logit [  RGB] = [+1.789  -1.813]   argmax=0 (upstairs) ✓
+Collecting confidences (TEST):  27%|██▋       | 3/11 [00:01<00:03,  2.57it/s]Collecting confidences (TEST):  55%|█████▍    | 6/11 [00:01<00:00,  5.74it/s]Collecting confidences (TEST):  82%|████████▏ | 9/11 [00:01<00:00,  9.14it/s]                                                                               │  aux logit [ Gyro] = [+1.808  -1.807]   argmax=0 (upstairs) ✓
+  │  aux logit [ Acce] = [-0.027  +0.027]   argmax=1 (downstairs) ✗
+  │  main logit         = [+3.430  -3.413]   argmax=0 (upstairs) ✓
+  │
+  │  E_RGB=-1.8154   E_Gyro=-1.8348   E_Acce=-0.6938   →  E_mean=-1.4480
+  │  ↑ E = -logsumexp(logit)   낮을수록 확실
+  │  Δ_RGB=-0.3674   Δ_Gyro=-0.3868   Δ_Acce=+0.7542
+  │  ↑ Δ = (E_m − E_mean)/T   음수=확실  양수=불확실
+  │
+  │  method            r_RGB         r_Gyro        r_Acce        │  α_RGB       α_Gyro      α_Acce      dominant   correct?
+  │  ────────────────  ────────────  ────────────  ────────────  │  ──────────  ──────────  ──────────
+  │  [actual r_m]      +0.4092        +0.4045        +0.6801        │  0.3024      0.3010      0.3965      Acce       ✗
+  │  low_linear        +0.3674        +0.3868        -0.7542        │  0.4264      0.4347      0.1389      Gyro      
+  │  high_linear       -0.3674        -0.3868        +0.7542        │  0.1980      0.1942      0.6078      Acce      
+  │  low_sigmoid       +0.5908        +0.5955        +0.3199        │  0.3614      0.3630      0.2756      Gyro      
+  │  high_sigmoid      +0.4092        +0.4045        +0.6801        │  0.3024      0.3010      0.3965      Acce       ← current
+  │
+  │  pred: main=0(upstairs)  aux=[RGB=0(upstairs)  Gyro=0(upstairs)  Acce=1(downstairs)]
+  │  label=0 (upstairs)  all_agree=✗
+  └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+2026-03-26 14:03:03,975 [mand.py] => [MAND] Class-wise confidence (TEST):
+2026-03-26 14:03:03,976 [mand.py] =>   Class 0:
+2026-03-26 14:03:03,976 [mand.py] =>     RGB: mean=0.2159, std=0.1382, min=0.0435, max=0.6281, n=40
+2026-03-26 14:03:03,976 [mand.py] =>     Gyro: mean=0.5073, std=0.1592, min=0.1794, max=0.7991, n=40
+2026-03-26 14:03:03,976 [mand.py] =>     Acce: mean=0.8034, std=0.0579, min=0.6593, max=0.9014, n=40
+2026-03-26 14:03:03,976 [mand.py] =>   Class 1:
+2026-03-26 14:03:03,976 [mand.py] =>     RGB: mean=0.0200, std=0.0673, min=0.0000, max=0.4301, n=43
+2026-03-26 14:03:03,976 [mand.py] =>     Gyro: mean=0.8958, std=0.1223, min=0.4753, max=0.9993, n=43
+2026-03-26 14:03:03,976 [mand.py] =>     Acce: mean=0.9558, std=0.0686, min=0.5939, max=0.9996, n=43
+2026-03-26 14:03:07,065 [mmeabase.py] => CL Accuracy - CNN: 100.00%, NME: 100.00%
+2026-03-26 14:03:07,065 [mmeabase.py] => === Task 0 OOD Evaluation ===
+2026-03-26 14:03:07,065 [mmeabase.py] => Known classes: 0-1
+2026-03-26 14:03:07,065 [mmeabase.py] => Unknown classes: 2-31
+2026-03-26 14:03:07,065 [mmeabase.py] => OOD Methods: ['MaxLogit_Hybrid_ConfNormalized']
+2026-03-26 14:03:07,065 [mmeabase.py] => === OOD Detection Results ===
+  📊 Processing ID data (logits + features)...
+Extracting data:   0%|          | 0/11 [00:00<?, ?it/s]Extracting data:   9%|▉         | 1/11 [00:00<00:06,  1.56it/s]Extracting data:  27%|██▋       | 3/11 [00:00<00:01,  4.87it/s]Extracting data:  45%|████▌     | 5/11 [00:01<00:01,  5.58it/s]Extracting data:  73%|███████▎  | 8/11 [00:01<00:00,  9.34it/s]Extracting data:  91%|█████████ | 10/11 [00:01<00:00,  8.00it/s]                                                                2026-03-26 14:03:08,625 [mmeabase.py] => ✅ Extracted data - Logits: torch.Size([83, 2]), Features: (664, 512), Labels: (83,)
+  🎯 Processing OOD data (logits + features)...
+Extracting data:   0%|          | 0/155 [00:00<?, ?it/s]Extracting data:   1%|          | 1/155 [00:00<01:47,  1.43it/s]Extracting data:   1%|▏         | 2/155 [00:00<00:53,  2.86it/s]Extracting data:   3%|▎         | 5/155 [00:01<00:36,  4.06it/s]Extracting data:   4%|▍         | 6/155 [00:01<00:33,  4.47it/s]Extracting data:   5%|▌         | 8/155 [00:01<00:22,  6.43it/s]Extracting data:   6%|▌         | 9/155 [00:02<00:35,  4.07it/s]Extracting data:   6%|▋         | 10/155 [00:02<00:33,  4.34it/s]Extracting data:   8%|▊         | 13/155 [00:02<00:29,  4.82it/s]Extracting data:   9%|▉         | 14/155 [00:03<00:29,  4.86it/s]Extracting data:  11%|█         | 17/155 [00:03<00:24,  5.57it/s]Extracting data:  12%|█▏        | 18/155 [00:03<00:26,  5.25it/s]Extracting data:  14%|█▎        | 21/155 [00:04<00:22,  6.04it/s]Extracting data:  14%|█▍        | 22/155 [00:04<00:26,  4.97it/s]Extracting data:  15%|█▌        | 24/155 [00:04<00:20,  6.42it/s]Extracting data:  16%|█▌        | 25/155 [00:04<00:20,  6.31it/s]Extracting data:  17%|█▋        | 26/155 [00:05<00:25,  4.98it/s]Extracting data:  19%|█▊        | 29/155 [00:05<00:16,  7.72it/s]Extracting data:  20%|██        | 31/155 [00:05<00:17,  6.95it/s]Extracting data:  22%|██▏       | 34/155 [00:06<00:16,  7.45it/s]Extracting data:  24%|██▍       | 37/155 [00:06<00:11, 10.05it/s]Extracting data:  25%|██▌       | 39/155 [00:06<00:14,  8.09it/s]Extracting data:  26%|██▋       | 41/155 [00:06<00:12,  9.48it/s]Extracting data:  28%|██▊       | 43/155 [00:07<00:13,  8.20it/s]Extracting data:  30%|██▉       | 46/155 [00:07<00:13,  8.05it/s]Extracting data:  32%|███▏      | 49/155 [00:07<00:10,  9.97it/s]Extracting data:  33%|███▎      | 51/155 [00:07<00:11,  8.99it/s]Extracting data:  35%|███▍      | 54/155 [00:08<00:11,  9.04it/s]Extracting data:  37%|███▋      | 57/155 [00:08<00:08, 11.28it/s]Extracting data:  38%|███▊      | 59/155 [00:08<00:09,  9.68it/s]Extracting data:  39%|███▉      | 61/155 [00:08<00:08, 10.90it/s]Extracting data:  41%|████      | 63/155 [00:09<00:09,  9.24it/s]Extracting data:  42%|████▏     | 65/155 [00:09<00:09,  9.48it/s]Extracting data:  43%|████▎     | 67/155 [00:09<00:10,  8.24it/s]Extracting data:  45%|████▍     | 69/155 [00:09<00:09,  9.00it/s]Extracting data:  46%|████▌     | 71/155 [00:10<00:10,  8.14it/s]Extracting data:  47%|████▋     | 73/155 [00:10<00:08,  9.21it/s]Extracting data:  48%|████▊     | 75/155 [00:10<00:09,  8.00it/s]Extracting data:  50%|████▉     | 77/155 [00:10<00:08,  8.84it/s]Extracting data:  50%|█████     | 78/155 [00:10<00:09,  7.79it/s]Extracting data:  52%|█████▏    | 80/155 [00:11<00:07,  9.70it/s]Extracting data:  53%|█████▎    | 82/155 [00:11<00:08,  8.20it/s]Extracting data:  55%|█████▍    | 85/155 [00:11<00:07,  9.57it/s]Extracting data:  56%|█████▌    | 87/155 [00:11<00:07,  8.63it/s]Extracting data:  57%|█████▋    | 89/155 [00:12<00:06, 10.00it/s]Extracting data:  59%|█████▊    | 91/155 [00:12<00:07,  8.65it/s]Extracting data:  60%|██████    | 93/155 [00:12<00:06, 10.21it/s]Extracting data:  61%|██████▏   | 95/155 [00:12<00:07,  8.10it/s]Extracting data:  63%|██████▎   | 98/155 [00:13<00:07,  7.97it/s]Extracting data:  65%|██████▍   | 100/155 [00:13<00:05,  9.35it/s]Extracting data:  66%|██████▌   | 102/155 [00:13<00:06,  8.27it/s]Extracting data:  68%|██████▊   | 105/155 [00:13<00:04, 10.98it/s]Extracting data:  69%|██████▉   | 107/155 [00:14<00:05,  8.88it/s]Extracting data:  71%|███████   | 110/155 [00:14<00:05,  8.60it/s]Extracting data:  73%|███████▎  | 113/155 [00:14<00:03, 10.90it/s]Extracting data:  74%|███████▍  | 115/155 [00:14<00:04,  8.77it/s]Extracting data:  76%|███████▌  | 118/155 [00:15<00:04,  8.57it/s]Extracting data:  77%|███████▋  | 120/155 [00:15<00:03,  9.71it/s]Extracting data:  79%|███████▊  | 122/155 [00:15<00:03,  8.43it/s]Extracting data:  81%|████████  | 125/155 [00:15<00:02, 11.08it/s]Extracting data:  82%|████████▏ | 127/155 [00:16<00:03,  8.54it/s]Extracting data:  84%|████████▍ | 130/155 [00:16<00:03,  8.03it/s]Extracting data:  86%|████████▌ | 133/155 [00:16<00:02, 10.59it/s]Extracting data:  87%|████████▋ | 135/155 [00:17<00:02,  8.43it/s]Extracting data:  89%|████████▉ | 138/155 [00:17<00:02,  8.10it/s]Extracting data:  91%|█████████ | 141/155 [00:17<00:01, 10.59it/s]Extracting data:  92%|█████████▏| 143/155 [00:18<00:01,  8.79it/s]Extracting data:  94%|█████████▍| 146/155 [00:18<00:01,  8.40it/s]Extracting data:  96%|█████████▌| 149/155 [00:18<00:00, 10.94it/s]Extracting data:  97%|█████████▋| 151/155 [00:18<00:00,  8.92it/s]Extracting data:  99%|█████████▉| 154/155 [00:19<00:00,  8.71it/s]                                                                  2026-03-26 14:03:28,053 [mmeabase.py] => ✅ Extracted data - Logits: torch.Size([1233, 2]), Features: (9864, 512), Labels: (1233,)
+✅ Data extracted - ID: logitstorch.Size([83, 2]), features(664, 512)
+                   OOD: logitstorch.Size([1233, 2]), features(9864, 512)
+  🔥 UnifiedOODDetector Hybrid methods detected - collecting auxiliary outputs...
+Collecting outputs:   0%|          | 0/11 [00:00<?, ?it/s]Collecting outputs:   9%|▉         | 1/11 [00:00<00:06,  1.58it/s]Collecting outputs:  27%|██▋       | 3/11 [00:00<00:01,  4.97it/s]Collecting outputs:  45%|████▌     | 5/11 [00:01<00:01,  5.70it/s]Collecting outputs:  64%|██████▎   | 7/11 [00:01<00:00,  8.15it/s]Collecting outputs:  82%|████████▏ | 9/11 [00:01<00:00,  7.68it/s]                                                                  Collecting outputs:   0%|          | 0/155 [00:00<?, ?it/s]../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [0,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [1,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [2,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [3,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [4,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [5,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [6,0,0] Assertion `t >= 0 && t < n_classes` failed.
+../aten/src/ATen/native/cuda/Loss.cu:250: nll_loss_forward_reduce_cuda_kernel_2d: block: [0,0,0], thread: [7,0,0] Assertion `t >= 0 && t < n_classes` failed.
+                                                           2026-03-26 14:03:30,710 [trainer.py] => Task 1 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 2/16 OOD 평가 시작
+2026-03-26 14:03:30,712 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,712 [mmeabase.py] => === Inference Mode: Task 1 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 4
+2026-03-26 14:03:30,777 [trainer.py] => Task 2 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 3/16 OOD 평가 시작
+2026-03-26 14:03:30,777 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,777 [mmeabase.py] => === Inference Mode: Task 2 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 6
+2026-03-26 14:03:30,778 [trainer.py] => Task 3 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 4/16 OOD 평가 시작
+2026-03-26 14:03:30,779 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,779 [mmeabase.py] => === Inference Mode: Task 3 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 8
+2026-03-26 14:03:30,780 [trainer.py] => Task 4 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 5/16 OOD 평가 시작
+2026-03-26 14:03:30,780 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,780 [mmeabase.py] => === Inference Mode: Task 4 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 10
+2026-03-26 14:03:30,781 [trainer.py] => Task 5 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 6/16 OOD 평가 시작
+2026-03-26 14:03:30,781 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,781 [mmeabase.py] => === Inference Mode: Task 5 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 12
+2026-03-26 14:03:30,782 [trainer.py] => Task 6 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 7/16 OOD 평가 시작
+2026-03-26 14:03:30,783 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,783 [mmeabase.py] => === Inference Mode: Task 6 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 14
+2026-03-26 14:03:30,784 [trainer.py] => Task 7 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 8/16 OOD 평가 시작
+2026-03-26 14:03:30,784 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,785 [mmeabase.py] => === Inference Mode: Task 7 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 16
+2026-03-26 14:03:30,786 [trainer.py] => Task 8 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 9/16 OOD 평가 시작
+2026-03-26 14:03:30,786 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,786 [mmeabase.py] => === Inference Mode: Task 8 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 18
+2026-03-26 14:03:30,787 [trainer.py] => Task 9 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 10/16 OOD 평가 시작
+2026-03-26 14:03:30,788 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,788 [mmeabase.py] => === Inference Mode: Task 9 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 20
+2026-03-26 14:03:30,789 [trainer.py] => Task 10 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 11/16 OOD 평가 시작
+2026-03-26 14:03:30,790 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,790 [mmeabase.py] => === Inference Mode: Task 10 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 22
+2026-03-26 14:03:30,791 [trainer.py] => Task 11 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 12/16 OOD 평가 시작
+2026-03-26 14:03:30,791 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,791 [mmeabase.py] => === Inference Mode: Task 11 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 24
+2026-03-26 14:03:30,793 [trainer.py] => Task 12 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 13/16 OOD 평가 시작
+2026-03-26 14:03:30,793 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,793 [mmeabase.py] => === Inference Mode: Task 12 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 26
+2026-03-26 14:03:30,794 [trainer.py] => Task 13 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 14/16 OOD 평가 시작
+2026-03-26 14:03:30,794 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,794 [mmeabase.py] => === Inference Mode: Task 13 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 28
+2026-03-26 14:03:30,795 [trainer.py] => Task 14 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 15/16 OOD 평가 시작
+2026-03-26 14:03:30,795 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,795 [mmeabase.py] => === Inference Mode: Task 14 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 30
+2026-03-26 14:03:30,796 [trainer.py] => Task 15 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+
+Task 16/16 OOD 평가 시작
+2026-03-26 14:03:30,797 [trainer.py] => [MAND] Using parameter-specific directory: beta0.1_lambda0.5
+2026-03-26 14:03:30,797 [trainer.py] => enable_ood=False in eval mode. Only CL evaluation will be performed.
+2026-03-26 14:03:30,797 [mmeabase.py] => === Inference Mode: Task 15 ===
+🔍 TBNClassification Debug:
+   Modality count: 3
+   Feature dim: 512
+   FC input dim: 512
+   FC output dim: 32
+2026-03-26 14:03:30,798 [trainer.py] => Task 16 evaluation failed: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+2026-03-26 14:03:30,798 [trainer.py] => 
+============================================================
+2026-03-26 14:03:30,798 [trainer.py] => FINAL RESULTS SUMMARY
+2026-03-26 14:03:30,798 [trainer.py] => ============================================================
+2026-03-26 14:03:30,798 [trainer.py] => No results to summarize
+

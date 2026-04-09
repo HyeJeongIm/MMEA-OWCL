@@ -1,0 +1,98 @@
+name: 'Evaluate TBN-MAND (lambda=0.4, beta=0.005) (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
+project: 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
+entity: 'mmea-owcl'
+
+method: grid
+metric:
+  goal: maximize
+  name: Task/avg_acc
+program: main.py
+
+parameters:
+  dataset:
+    values: ['mmea']
+  train_list:
+    values: ['mmea_train_total.txt']
+  test_list:
+    values: ['mmea_test.txt']
+  model_name:
+    values: ['tbn_mand']
+  workers:
+    values: [4]
+  epochs:
+    values: [50]
+
+  # ---------------------------
+  # Incremental Learning Config
+  # ---------------------------
+  exemplar_selection:
+    values: ['herding']
+  modality:
+    values: [['RGB', 'Gyro', 'Acce']]
+  fusion_type:
+    values: ['mand_fusion']
+  pretrain_epochs:
+    values: [50]
+  confidence_method:
+    values: ['energy']
+  energy_norm_method:
+    # abs_energy (Approach B): r_m = -E_m / T  (절대 에너지, main도 weight 경쟁 참여)
+    #   α = softmax([r_main, r_RGB, r_Gyro, r_Acce])
+    #   z^MoAS = α_main·z_main + Σ_m α_m·z_m
+    #   ID:  E_main 매우 낮음 → α_main 압도 → combined 뾰족 → 낮은 OOD score
+    #   OOD: 모든 E 보통/균등 → weights 균등 → combined 퍼짐 → 높은 OOD score
+    values: ['zscore']
+  mode:
+    values: ['eval']
+  increment:
+    values: [8, 4, 2]
+  enable_ood:
+    values: [true]
+  weights_path:
+    values: [null]
+  # train 시 experiment_suffix: "train"으로 저장된 가중치를 로드하기 위해 동일 suffix 필요
+  # 가중치 경로: logs/{dataset}_{model}_{fusion}_{modality}_ep{e}_bs{b}_pb{p}_fr{f}_inc{inc}_mem{mem}_train/herding/seed_{s}/weights/beta0.1_lambda0.5/
+  experiment_suffix:
+    values: ["train"]
+
+  # [Logit-Diag] 배치별 logit → energy → weight 흐름 로그 저장
+  # 경로는 trainer.py에서 자동 생성:
+  #   logs/{experiment_dir}/results/diag_logit_enm-abs_energy_inc{N}_seed{S}.log
+  # 직접 지정하려면 아래 주석 해제 후 경로 수정
+  # diag_log_path:
+  #   values: ['logs/diag/abs_energy.log']
+  ood_methods:
+    values: [[
+      # ========================================
+      # Logit-based OOD Methods (Baseline)
+      # ========================================
+      "MaxLogit_Baseline",
+
+      # ========================================
+      # Logit-based Hybrid - UniformSum
+      # ========================================
+      "MaxLogit_Hybrid_UniformSum",
+
+      # ========================================
+      # Logit-based Hybrid - UniformAverage
+      # ========================================
+      "MaxLogit_Hybrid_UniformAverage",
+
+      # ========================================
+      # Logit-based Hybrid - ConfNormalized
+      # (abs_energy 가중치로 결합된 logit 사용)
+      # ========================================
+      # "MaxLogit_Hybrid_ConfNormalized",
+    ]]
+  seed:
+    values: [1993, 1994, 1995, 1996, 1997]
+
+  # ---------------------------
+  # 🔹 Hyperparameters to Sweep: λ (morst_lambda), β (morst_beta)
+  # MAND: mand.py — morst_beta(β), morst_lambda(λ). Temperature 없음.
+  # baseline_tbn/fusion: aux_loss_weight 또는 morst_lambda 사용
+  # ---------------------------
+  morst_lambda:
+    values: [0.4]
+  morst_beta:
+    values: [0.005]

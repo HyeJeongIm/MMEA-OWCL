@@ -1,0 +1,81 @@
+# TBN-MAND w/o MoRST (Ablation) — Evaluation
+name: 'Evaluate Ablation (w/o MoRST) TBN-MAND (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
+project: 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
+entity: 'mmea-owcl'
+
+method: grid
+metric:
+  goal: maximize
+  name: Task/avg_acc
+program: main.py
+
+parameters:
+  dataset:
+    values: ['mmea']
+  train_list:
+    values: ['mmea_train_total.txt']
+  test_list:
+    values: ['mmea_test.txt']
+  model_name:
+    values: ['tbn_mand_wo_morst']
+  workers:
+    values: [4]
+  epochs:
+    values: [50]
+
+  # ---------------------------
+  # Incremental Learning Config
+  # ---------------------------
+  exemplar_selection:
+    values: ['herding']
+  modality:
+    values: [['RGB', 'Gyro', 'Acce']]
+  fusion_type:
+    values: ['mand_fusion']
+  pretrain_epochs:
+    values: [50]
+  confidence_method:
+    values: ['energy']
+  energy_norm_method:
+    values: ['zscore']
+  mode:
+    values: ['eval']
+  increment:
+    values: [8, 4, 2]
+  enable_ood:
+    values: [true]
+  weights_path:
+    values: [null]
+  # train 시 experiment_suffix: "train_wo_morst"로 저장된 가중치를 로드하기 위해 동일 suffix 필요
+  experiment_suffix:
+    values: ["train_wo_morst"]
+  morst_enabled:
+    values: [false]
+
+  ood_methods:
+    values: [[
+      # ========================================
+      # Logit-based OOD Methods (Baseline)
+      # ========================================
+      "MaxLogit_Baseline",
+
+      # ========================================
+      # Logit-based Hybrid - UniformSum
+      # ========================================
+      "MaxLogit_Hybrid_UniformSum",
+
+      # ========================================
+      # Logit-based Hybrid - UniformAverage
+      # ========================================
+      "MaxLogit_Hybrid_UniformAverage",
+    ]]
+  seed:
+    values: [1993, 1994, 1995, 1996, 1997]
+
+  # ---------------------------
+  # Hyperparameters (λ fixed, β disabled via morst_enabled=false)
+  # ---------------------------
+  morst_lambda:
+    values: [0.4]
+  morst_beta:
+    values: [0.005]
