@@ -81,7 +81,7 @@ parameters:
   # 🔹 Alpha Temperature Sweep
   # Prototype-based 5개 method(PrototypeAdaptive, EnergyGate, PenaltyScore,
   # Disagreement, RewardPenaltyScore)의 softmax sharpening 강도.
-  # MaxLogit / ContrastiveConsistency / MinModality / MOAS는 alpha_temp 무관.
+  # MaxLogit / ContrastiveConsistency / MinModality / MOAS는 tau 무관.
   #
   # τ = 2.0, 3.0, 4.0, 5.0 
   # τ = 1.0 : 기존 그대로 (standard softmax, weight collapse 가능성 높음)
@@ -89,17 +89,17 @@ parameters:
   # τ = 0.3 : 중간 sharpening  ← pilot 추천 시작점
   # τ = 0.1 : 강한 sharpening (u_stack 차이가 작아도 거의 argmax처럼 동작)
   #
-  # 현재 runs: increment(3) × seed(5) × alpha_temp(4) = 60 runs
+  # 현재 runs: increment(3) × seed(5) × tau(4) = 60 runs
   # 빠른 pilot 원하면 seed를 [1993]으로 줄이고 increment를 [8]로 고정 → 4 runs
   # ---------------------------
-  alpha_temp:
+  tau:
     values: [3.0]
 
   # ---------------------------
   # 🔹 OOD Penalty Hyperparameters (Stage 1 Sweep)
   # Cross-Modal methods의 penalty 강도 탐색.
   #
-  # ood_beta  : prototype distance penalty 강도
+  # ood_eta  : prototype distance penalty 강도
   #   낮을수록 거리 penalty 약함 (logit fusion 위주)
   #   높을수록 OOD 억제 강함 (FP 증가 위험)
   #   runs 기준 P_proto_mean × beta ∈ [0.3, 0.8] 이 적정
@@ -112,7 +112,7 @@ parameters:
   # 총 runs: increment(3) × seed(5) × beta(4) × gamma(4) = 240 runs
   # 빠른 pilot: seed=[1993], increment=[8] → 16 runs
   # ---------------------------
-  ood_beta:
+  ood_eta:
     values: [3.0]
 
   ood_gamma:

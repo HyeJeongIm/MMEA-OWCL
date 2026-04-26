@@ -657,7 +657,7 @@ class MMEABaseLearner(BaseLearner):
 
         # 🔥 Auxiliary outputs 사전 수집 (UnifiedOODDetector Hybrid 모드용)
         _PROTO_OOD_METHODS = {
-            "MoAS", "MoAS_ConfidenceOnly", "MoAS_DistancePenalty", "MoAS_KLPenalty",
+            "MoAS", "MoAS_AdaptiveFusion", "MoAS_DeviationPenalty", "MoAS_KLPenalty",
             "MoAS_old",
         }
         _AUX_LOGIT_METHODS = set()
@@ -750,57 +750,55 @@ class MMEABaseLearner(BaseLearner):
                 elif method_name in _PROTO_OOD_METHODS:
                     fusion = getattr(self._network, 'fusion', None) or \
                              getattr(self._network, 'fusion_network', None)
-                    if fusion is None or not getattr(fusion, '_prototypes', {}):
-                        logging.warning(f"[{method_name}] Prototypes not available — skipping")
+                    if fusion is None or not getattr(fusion, '_raw_logit_arrays', {}):
+                        logging.warning(f"[{method_name}] raw_logit_arrays not available — skipping")
                         continue
 
-                    _alpha_temp = self.args.get('alpha_temp', 1.0)
-                    _ood_beta   = self.args.get('ood_beta', 1.0)
-                    _ood_gamma  = self.args.get('ood_gamma', 0.5)
+                    _tau       = self.args.get('tau', 1.0)
+                    _ood_eta   = self.args.get('ood_eta', 1.0)
+                    _ood_gamma = self.args.get('ood_gamma', 0.5)
                     _proto_kwargs = dict(
-                        prototypes=fusion._prototypes,
                         dist_stats=fusion._dist_stats,
                         modality=self._modality,
                         device=self._device,
-                        alpha_temp=_alpha_temp,
+                        tau=_tau,
                     )
                     _raw_logit_arrays = getattr(fusion, '_raw_logit_arrays', {})
                     _raw_proto_kwargs = dict(
-                        prototypes=fusion._prototypes,
                         raw_logit_arrays=_raw_logit_arrays,
                         dist_stats=fusion._dist_stats,
                         modality=self._modality,
                         device=self._device,
-                        alpha_temp=_alpha_temp,
+                        tau=_tau,
                     )
 
                     if method_name == "MoAS":
-                        from ood.methods.knn_prototype_penalty_score import MoASDetector
+                        from ood.methods.moas_detector import MoASDetector
                         if not _raw_logit_arrays:
                             logging.warning("[MoAS] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASDetector(**_raw_proto_kwargs, beta=_ood_beta, gamma=_ood_gamma)
+                        detector = MoASDetector(**_raw_proto_kwargs, eta=_ood_eta, gamma=_ood_gamma)
 
-                    elif method_name == "MoAS_ConfidenceOnly":
-                        from ood.methods.knn_prototype_penalty_score import MoASConfidenceOnlyDetector
+                    elif method_name == "MoAS_AdaptiveFusion":
+                        from ood.methods.moas_detector import MoASAdaptiveFusionOnly
                         if not _raw_logit_arrays:
-                            logging.warning("[MoAS_ConfidenceOnly] raw_logit_arrays not available — skipping")
+                            logging.warning("[MoAS_AdaptiveFusion] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASConfidenceOnlyDetector(**_raw_proto_kwargs)
+                        detector = MoASAdaptiveFusionOnly(**_raw_proto_kwargs)
 
-                    elif method_name == "MoAS_DistancePenalty":
-                        from ood.methods.knn_prototype_penalty_score import MoASDistancePenaltyDetector
+                    elif method_name == "MoAS_DeviationPenalty":
+                        from ood.methods.moas_detector import MoASDeviationPenalty
                         if not _raw_logit_arrays:
-                            logging.warning("[MoAS_DistancePenalty] raw_logit_arrays not available — skipping")
+                            logging.warning("[MoAS_DeviationPenalty] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASDistancePenaltyDetector(**_raw_proto_kwargs, beta=_ood_beta)
+                        detector = MoASDeviationPenalty(**_raw_proto_kwargs, eta=_ood_eta)
 
                     elif method_name == "MoAS_KLPenalty":
-                        from ood.methods.knn_prototype_penalty_score import MoASKLPenaltyDetector
+                        from ood.methods.moas_detector import MoASKLPenalty
                         if not _raw_logit_arrays:
                             logging.warning("[MoAS_KLPenalty] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASKLPenaltyDetector(**_raw_proto_kwargs, gamma=_ood_gamma)
+                        detector = MoASKLPenalty(**_raw_proto_kwargs, gamma=_ood_gamma)
 
                 else:
                     logging.warning(f"⚠️  Unknown OOD method: {method_name}")
@@ -1300,7 +1298,7 @@ class MMEABaseLearner(BaseLearner):
 
         # ── Prototype 기반 OOD methods: checkpoint에 있으면 복원된 것 사용, 없으면 재계산 ──
         _PROTO_REQUIRED = {
-            "MoAS", "MoAS_ConfidenceOnly", "MoAS_DistancePenalty", "MoAS_KLPenalty",
+            "MoAS", "MoAS_AdaptiveFusion", "MoAS_DeviationPenalty", "MoAS_KLPenalty",
         }
         if _PROTO_REQUIRED & set(self.args.get("ood_methods", [])):
             fusion = getattr(self._network, 'fusion', None) or \

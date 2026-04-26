@@ -1,4 +1,4 @@
-name: '[MoAS_check] alpha_temp∈{3.0}, ood_beta∈{3.0}, ood_gamma∈{4.0} | TBN-MAND (Inc 8,4,2) Seeds 1993-1997'
+name: '[MoAS_check] τ∈{3.0}, η∈{3.0}, γ∈{4.0} | TBN-MAND (Inc 8,4,2) Seeds 1993-1997'
 project: 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
 entity: 'mmea-owcl'
 
@@ -58,15 +58,15 @@ parameters:
       # [MoAS Ablation Study]
       # 각 컴포넌트의 기여를 단계적으로 측정
       #
-      # variant                | score 수식
-      # -----------------------+----------------------------------------------
-      # MoAS_ConfidenceOnly    | max(z_fused)                    (fusion only)
-      # MoAS_DistancePenalty   | max(z_fused) - α·P(x)          (+ dist)
-      # MoAS_KLPenalty         | max(z_fused) - γ·D_KL(x)       (+ KL)
-      # MoAS                   | max(z_fused) - α·P(x) - γ·D_KL(x)  (full)
+      # variant                  | score 수식
+      # -------------------------+----------------------------------------------
+      # MoAS_AdaptiveFusion      | max(z_fused)                       (fusion only)
+      # MoAS_DeviationPenalty    | max(z_fused) - η·P(x)              (+ P(x))
+      # MoAS_KLPenalty           | max(z_fused) - γ·D_KL(x)           (+ D_KL)
+      # MoAS                     | max(z_fused) - η·P(x) - γ·D_KL(x)  (full)  [Eq. 7]
       #
-      # z_fused = z_main + Σ w_m·z_m  (kNN 기반 modality weighting, 모든 variant 공통)
-      # α = ood_beta, γ = ood_gamma, τ = alpha_temp
+      # z_fused = z_main + Σ_m α_m·z_m  (kNN 기반 modality weighting, 모든 variant 공통)
+      # η = ood_eta, γ = ood_gamma, τ = tau
       # ========================================
 
       # ── Baselines ────────────────────────────────────────────────────
@@ -74,11 +74,11 @@ parameters:
       "MaxLogit_Hybrid_UniformAverage",
 
       # # ── MoAS Ablation ────────────────────────────────────────────────
-      # "MoAS_ConfidenceOnly",    # adaptive fusion only, no penalties
-      # "MoAS_DistancePenalty",   # + prototype distance penalty (α·P)
+      # "MoAS_AdaptiveFusion",      # adaptive fusion only (α_m weights, no penalty)
+      # "MoAS_DeviationPenalty",    # + known-class deviation penalty η·P(x)
       # "MoAS_KLPenalty",         # + cross-modal KL penalty (γ·D_KL)
       "MoAS",        
-      # "MoAS_old",    # full MoAS (= CrossModalKNNPrototypePenaltyScore)
+      # "MoAS_old",    # full MoAS (= CrossModalKNNMoASDetector)
     ]]
   seed:
     values: [1993, 1994, 1995, 1996, 1997]
@@ -94,10 +94,9 @@ parameters:
     values: [0.005]
 
   # ---------------------------
-  # 🔹 Alpha Temperature Sweep
-  # Prototype-based 5개 method(PrototypeAdaptive, EnergyGate, PenaltyScore,
-  # Disagreement, RewardPenaltyScore)의 softmax sharpening 강도.
-  # MaxLogit / ContrastiveConsistency / MinModality / MOAS는 alpha_temp 무관.
+  # 🔹 Temperature τ Sweep  [Eq. 3]
+  # Modality reliability weight α_m = softmax(-d̃_m / τ) 의 sharpening 강도.
+  # τ가 클수록 더 균등한 가중치 (soft), 작을수록 argmax에 가까운 가중치 (sharp).
   #
   # τ = 2.0, 3.0, 4.0, 5.0 
   # τ = 1.0 : 기존 그대로 (standard softmax, weight collapse 가능성 높음)
@@ -105,30 +104,30 @@ parameters:
   # τ = 0.3 : 중간 sharpening  ← pilot 추천 시작점
   # τ = 0.1 : 강한 sharpening (u_stack 차이가 작아도 거의 argmax처럼 동작)
   #
-  # 현재 runs: increment(3) × seed(5) × alpha_temp(4) = 60 runs
+  # 현재 runs: increment(3) × seed(5) × tau(4) = 60 runs
   # 빠른 pilot 원하면 seed를 [1993]으로 줄이고 increment를 [8]로 고정 → 4 runs
   # ---------------------------
-  alpha_temp:
+  tau:
     values: [3.0]
 
   # ---------------------------
   # 🔹 OOD Penalty Hyperparameters (Stage 1 Sweep)
   # Cross-Modal methods의 penalty 강도 탐색.
   #
-  # ood_beta  : prototype distance penalty 강도
+  # ood_eta  (η): known-class deviation penalty weight  [Eq. 7]
   #   낮을수록 거리 penalty 약함 (logit fusion 위주)
   #   높을수록 OOD 억제 강함 (FP 증가 위험)
-  #   runs 기준 P_proto_mean × beta ∈ [0.3, 0.8] 이 적정
+  #   runs 기준 P(x)_mean × η ∈ [0.3, 0.8] 이 적정
   #
-  # ood_gamma : cross-modal KL disagreement penalty 강도
+  # ood_gamma (γ): cross-modal KL disagreement penalty weight  [Eq. 7]
   #   0.0 = KL penalty 없음 (CrossModal variant가 base와 동일하게 동작)
-  #   0.3~0.5 = P_proto와 D_kl이 균형 (D_kl ≈ 0.5 nats 기준)
-  #   1.0+ = D_kl 지배 (near-OOD 강화, ID score 약간 낮아질 수 있음)
+  #   0.3~0.5 = P(x)와 D_KL이 균형 (D_KL ≈ 0.5 nats 기준)
+  #   1.0+ = D_KL 지배 (near-OOD 강화, ID score 약간 낮아질 수 있음)
   #
-  # 총 runs: increment(3) × seed(5) × beta(4) × gamma(4) = 240 runs
+  # 총 runs: increment(3) × seed(5) × η(4) × γ(4) = 240 runs
   # 빠른 pilot: seed=[1993], increment=[8] → 16 runs
   # ---------------------------
-  ood_beta:
+  ood_eta:
     values: [3.0]
 
   ood_gamma:

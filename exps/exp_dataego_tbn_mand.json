@@ -38,7 +38,10 @@
 
   "mode": "eval",
   "enable_ood": true,
-  "ood_methods": ["Energy_Hybrid_ConfNormalized", "MaxLogit_Hybrid_ConfNormalized"],
+  "ood_methods": ["MaxLogit_Baseline", "MaxLogit_Hybrid_UniformAverage", "MoAS"],
+  "tau": 3.0,
+  "ood_eta": 3.0,
+  "ood_gamma": 4.0,
   "weights_path": "",
 
   "seed": 1993,

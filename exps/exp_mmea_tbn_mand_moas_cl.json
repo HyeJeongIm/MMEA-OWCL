@@ -31,7 +31,7 @@
   "shuffle": false,
 
   "pretrain_epochs": 50,
-  "alpha_temp": 3.0,
+  "tau": 3.0,
   "morst_lambda": 0.4,
   "morst_beta": 0.005,
   "partialbn": true,
@@ -42,7 +42,7 @@
   "mode": "eval",
   "enable_ood": true,
   "ood_methods": ["MaxLogit_Baseline", "MaxLogit_Hybrid_UniformAverage", "MoAS"],
-  "ood_beta": 3.0,
+  "ood_eta": 3.0,
   "ood_gamma": 4.0,
   "weights_path": "",
 

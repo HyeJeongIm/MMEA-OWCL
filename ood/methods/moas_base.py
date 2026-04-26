@@ -1,14 +1,18 @@
 """
-Base class for Prototype Penalty Score OOD detectors.
+MoASBase — Abstract base class for MoAS (Modality-adaptive OOD Scoring).
 
-All distance-metric variants (Cosine, kNN, DiagMahal, SoftmaxL2, PooledMahal)
-inherit from this class and implement _compute_dist_for_modality(z, m).
+Subclasses implement _compute_dist_for_modality() to provide the distance
+metric (e.g. 1-NN L2 in KNNMoASDetector). The scoring algorithm (Eq. 2–7)
+is fully implemented here.
 
-Key design:
-  - dist_stats self-computed from raw_logit_arrays using subclass distance metric
-    → fixes the L2/Cosine stats mismatch in earlier implementations
-  - gamma=0 → no KL penalty (base variant)
-  - gamma>0 → cross-modal KL penalty added (CrossModal variant)
+Paper notation (ICMLW):
+  d̃_m  — normalised kNN distance per modality               [Eq. 2]
+  α_m   — modality reliability weight = softmax(-d̃_m / τ)   [Eq. 3]
+  τ     (tau)   — temperature for α_m weights                [Eq. 3]
+  η     (eta)   — known-class deviation penalty weight        [Eq. 7]
+  γ     (gamma) — cross-modal KL disagreement penalty weight  [Eq. 7]
+  P(x)  — known-class deviation penalty = mean_m max(0, d̃_m) [Eq. 5]
+  D_KL  — cross-modal KL disagreement                        [Eq. 6]
 """
 
 import logging
@@ -22,30 +26,30 @@ except ImportError:
     _WANDB_AVAILABLE = False
 
 
-class BasePrototypePenaltyDetector:
+class MoASBase:
     """
     Args:
-        prototypes:        {m: {class_idx: np.ndarray [C]}}  mean prototype
-        raw_logit_arrays:  {m: {class_idx: list[np.ndarray [C]]}}  all buffer vecs
+        raw_logit_arrays:  {m: {class_idx: list[np.ndarray [C]]}}  buffer vecs (kNN gallery 구성)
         modality:          ordered auxiliary modality list e.g. ['RGB','Gyro','Acce']
         device:            torch device string
-        beta:              prototype distance penalty weight
-        gamma:             cross-modal KL penalty weight  (0 = no KL term)
-        alpha_temp:        softmax temperature for modality reliability weights
-        dist_stats:        fallback if raw_logit_arrays is empty
+        eta:               known-class deviation penalty weight η  [Eq. 7]
+        gamma:             cross-modal KL disagreement penalty weight γ  [Eq. 7]
+                           (0 = no KL term)
+        tau:               softmax temperature τ for modality reliability weights α_m  [Eq. 3]
+        dist_stats:        precomputed (μ_m, σ_m) fallback when raw_logit_arrays is empty
     """
 
-    def __init__(self, prototypes: dict, modality: list,
-                 device: str = "cuda", beta: float = 1.0,
-                 gamma: float = 0.0, alpha_temp: float = 1.0,
-                 raw_logit_arrays: dict = None, dist_stats: dict = None):
-        self.prototypes = prototypes
+    def __init__(self, modality: list,
+                 device: str = "cuda", eta: float = 1.0,
+                 gamma: float = 0.0, tau: float = 1.0,
+                 raw_logit_arrays: dict = None, dist_stats: dict = None,
+                 **kwargs):
         self.raw_logit_arrays = raw_logit_arrays or {}
         self.modality = modality
         self.device = device
-        self.beta = beta
+        self.eta = eta
         self.gamma = gamma
-        self.alpha_temp = alpha_temp
+        self.tau = tau
         self._wandb_logged = False
 
         self._setup()
@@ -56,8 +60,8 @@ class BasePrototypePenaltyDetector:
             self.dist_stats = dist_stats or {}
 
         logging.info(
-            "[%s] β=%.2f, γ=%.2f, T=%.2f  dist_stats_keys=%s",
-            self.__class__.__name__, beta, gamma, alpha_temp,
+            "[%s] η=%.2f, γ=%.2f, τ=%.2f  dist_stats_keys=%s",
+            self.__class__.__name__, eta, gamma, tau,
             list(self.dist_stats.keys()),
         )
 
@@ -74,10 +78,10 @@ class BasePrototypePenaltyDetector:
         raise NotImplementedError
 
     def _fit_dist_stats(self) -> dict:
-        """Compute (μ, σ) per modality using this detector's own distance metric."""
+        """Compute (μ_m, σ_m) per modality using this detector's own distance metric."""
         dist_stats = {}
         for m, cls_dict in self.raw_logit_arrays.items():
-            if m not in self.prototypes or not cls_dict:
+            if not cls_dict:
                 continue
             dists = []
             for c, vecs in cls_dict.items():
@@ -118,7 +122,6 @@ class BasePrototypePenaltyDetector:
         avail = [
             m for m in self.modality
             if m in aux_logits
-            and m in self.prototypes and len(self.prototypes[m]) > 0
             and m in self.dist_stats
         ]
 
@@ -131,57 +134,62 @@ class BasePrototypePenaltyDetector:
 
         z_aux = {m: self._to_np(aux_logits[m]) for m in avail}
 
-        # Step 1: distance → normalized score u_proto, penalty term ood_m
-        u_proto, ood_m = {}, {}
+        # Step 1: normalise kNN distance d̃_m = (d_m - μ_m) / σ_m  [Eq. 2]
+        #   neg_d_tilde[m] = -d̃_m  → used as input to softmax for α_m (closer = higher)
+        #   pos_d_tilde[m] = max(0, d̃_m)  → OOD-only deviation, used to build P(x)
+        neg_d_tilde, pos_d_tilde = {}, {}
         for m in avail:
             raw_dist = self._compute_dist_for_modality(z_aux[m], m)  # [N]
             mu_d, sig_d = self.dist_stats[m]
-            normalized = (raw_dist - mu_d) / (sig_d + 1e-8)
-            u_proto[m] = -normalized
-            ood_m[m] = np.maximum(0.0, normalized)
+            d_tilde = (raw_dist - mu_d) / (sig_d + 1e-8)             # d̃_m  [Eq. 2]
+            neg_d_tilde[m] = -d_tilde
+            pos_d_tilde[m] = np.maximum(0.0, d_tilde)
 
-        # Step 2: α weights → z_final
-        u_stack = np.stack([u_proto[m] for m in avail], axis=1)  # [N, M]
+        # Step 2: modality reliability weights α_m = softmax(-d̃_m / τ)  [Eq. 3]
+        #         fused logit z_final = z_main + Σ_m α_m · z_m          [Eq. 4]
+        u_stack = np.stack([neg_d_tilde[m] for m in avail], axis=1)  # [N, M]
         u_stack -= u_stack.max(axis=1, keepdims=True)
-        exp_u = np.exp(u_stack / self.alpha_temp)
-        alpha = exp_u / exp_u.sum(axis=1, keepdims=True)           # [N, M]
+        exp_u = np.exp(u_stack / self.tau)
+        alpha = exp_u / exp_u.sum(axis=1, keepdims=True)             # [N, M]  α_m
 
         z_final = z_main_np.copy()
         for k, m in enumerate(avail):
             z_final = z_final + alpha[:, k:k+1] * z_aux[m]
 
-        # Step 3a: prototype distance penalty
-        P_proto = np.stack([ood_m[m] for m in avail], axis=1).mean(axis=1)  # [N]
+        # Step 3a: known-class deviation penalty P(x) = mean_m max(0, d̃_m)  [Eq. 5]
+        P_x = np.stack([pos_d_tilde[m] for m in avail], axis=1).mean(axis=1)  # [N]
 
-        # Step 3b: cross-modal KL penalty (only when gamma > 0)
+        # Step 3b: cross-modal KL disagreement penalty D_KL(x)  [Eq. 6]
+        #          only applied when γ > 0
         if self.gamma > 0:
             all_logits = {"main": z_main_np}
             all_logits.update(z_aux)
             p_all = [self._softmax_np(all_logits[k]) for k in ["main"] + avail]
             p_bar = np.mean(np.stack(p_all, axis=0), axis=0)
-            D_kl = np.mean(
+            D_KL = np.mean(
                 np.stack([self._kl_div(p, p_bar) for p in p_all], axis=0), axis=0
             )
-            scores = z_final.max(axis=1) - self.beta * P_proto - self.gamma * D_kl
+            # MoAS score: s(x) = max_c z_final,c(x) - η·P(x) - γ·D_KL(x)  [Eq. 7]
+            scores = z_final.max(axis=1) - self.eta * P_x - self.gamma * D_KL
         else:
-            D_kl = np.zeros(len(z_main_np))
-            scores = z_final.max(axis=1) - self.beta * P_proto
+            D_KL = np.zeros(len(z_main_np))
+            scores = z_final.max(axis=1) - self.eta * P_x
 
-        self._log_stats(avail, alpha, P_proto, D_kl)
+        self._log_stats(avail, alpha, P_x, D_KL)
         return scores
 
-    def _log_stats(self, avail, alpha, P_proto, D_kl) -> None:
+    def _log_stats(self, avail, alpha, P_x, D_KL) -> None:
         w_mean = alpha.mean(axis=0)
         name = self.__class__.__name__
         logging.info(
-            "[%s] α — %s | P_proto=%.4f, D_kl=%.4f", name,
+            "[%s] α — %s | P(x)=%.4f, D_KL=%.4f", name,
             ", ".join(f"{m}: {w_mean[k]:.4f}" for k, m in enumerate(avail)),
-            float(P_proto.mean()), float(D_kl.mean()),
+            float(P_x.mean()), float(D_KL.mean()),
         )
         if _WANDB_AVAILABLE and not self._wandb_logged:
             log_dict = {
-                f"{name}/P_proto_mean": float(P_proto.mean()),
-                f"{name}/D_kl_mean":   float(D_kl.mean()),
+                f"{name}/P_x_mean":   float(P_x.mean()),
+                f"{name}/D_KL_mean":  float(D_KL.mean()),
             }
             for k, m in enumerate(avail):
                 log_dict[f"{name}/alpha_mean_{m}"] = float(w_mean[k])
