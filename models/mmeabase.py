@@ -320,130 +320,6 @@ class MMEABaseLearner(BaseLearner):
                     'has_auxiliary': False
                 }
     
-    def _collect_class_confidences(self, phase):
-        """
-        Class별 modality confidence를 수집하고 출력
-        
-        Args:
-            phase: 로깅 시점 ("START", "FROZEN", "END", "TEST")
-        
-        Train 시점 (START, FROZEN, END): train_loader 내의 모든 class
-        Test 시점 (TEST): test_loader 내의 모든 class (0 ~ total_classes-1)
-        """
-        # Fusion 모듈이 auxiliary head를 가지고 있는지 확인
-        fusion_module = None
-        if hasattr(self._network, 'fusion'):
-            fusion_module = self._network.fusion
-        elif hasattr(self._network, 'fusion_network'):
-            fusion_module = self._network.fusion_network
-        
-        if fusion_module is None or not hasattr(fusion_module, 'auxiliary_heads'):
-            logging.info(f"⚠️  No auxiliary heads found - skipping class-wise confidence logging")
-            return
-        
-        # 시점에 따라 적절한 loader 선택
-        if phase == "TEST":
-            loader = self.test_loader
-            loader_desc = "test_loader"
-        else:
-            loader = self.train_loader
-            loader_desc = "train_loader"
-        
-        # Class별로 confidence를 저장할 딕셔너리
-        class_confidences = {}  # {class_id: {modality: [confidences]}}
-        
-        # 네트워크를 eval 모드로 전환 (학습 중이어도 inference만 수행)
-        was_training = self._network.training
-        self._network.eval()
-        
-        logging.info(f"")
-        logging.info(f"{'='*80}")
-        logging.info(f"📊 Collecting Class-wise Modality Confidences ({phase})")
-        logging.info(f"   Task: {self._cur_task}, Epoch: {fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else 'N/A'}")
-        logging.info(f"   Data Source: {loader_desc}")
-        logging.info(f"{'='*80}")
-        
-        with torch.no_grad():
-            for _, inputs, targets in tqdm(loader, desc=f"Collecting confidences ({phase})", leave=False):
-                # 입력을 디바이스로 이동
-                for m in self._modality:
-                    inputs[m] = inputs[m].to(self._device)
-                targets = targets.to(self._device)
-                
-                # Forward pass
-                outputs = self._network(inputs)
-                
-                # Confidence 추출
-                if 'confidences' not in outputs or not outputs['confidences']:
-                    continue
-                
-                confidences_dict = outputs['confidences']
-                
-                # 각 샘플에 대해 class별로 confidence 저장 (필터링 없이 모든 class)
-                for i, target in enumerate(targets):
-                    class_id = target.item()
-                    
-                    if class_id not in class_confidences:
-                        class_confidences[class_id] = {mod: [] for mod in self._modality}
-                    
-                    # 각 모달리티의 confidence 저장
-                    for modality in self._modality:
-                        if modality in confidences_dict:
-                            conf_val = confidences_dict[modality][i].item()
-                            class_confidences[class_id][modality].append(conf_val)
-        
-        # 원래 모드로 복원
-        if was_training:
-            self._network.train()
-        
-        # Class별 통계 출력
-        if class_confidences:
-            collected_classes = sorted(class_confidences.keys())
-            num_classes = len(collected_classes)
-            class_range_str = f"{collected_classes[0]}~{collected_classes[-1]}" if num_classes > 1 else f"{collected_classes[0]}"
-            
-            logging.info(f"")
-            logging.info(f"📈 Class-wise Modality Confidence Statistics:")
-            logging.info(f"   Collected {num_classes} classes: {class_range_str}")
-            logging.info(f"{'='*80}")
-            
-            # Class별로 정렬해서 출력
-            for class_id in collected_classes:
-                logging.info(f"  Class {class_id}:")
-                
-                for modality in self._modality:
-                    if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
-                        confs = np.array(class_confidences[class_id][modality])
-                        mean_conf = confs.mean()
-                        std_conf = confs.std()
-                        min_conf = confs.min()
-                        max_conf = confs.max()
-                        count = len(confs)
-                        
-                        logging.info(f"    {modality}: mean={mean_conf:.4f}, std={std_conf:.4f}, "
-                                   f"min={min_conf:.4f}, max={max_conf:.4f}, count={count}")
-            
-            logging.info(f"{'='*80}")
-            
-            # wandb 로깅
-            if self.args.get('use_wandb', False):
-                wandb_log = {}
-                
-                for class_id in class_confidences.keys():
-                    for modality in self._modality:
-                        if modality in class_confidences[class_id] and class_confidences[class_id][modality]:
-                            confs = np.array(class_confidences[class_id][modality])
-                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_mean"] = confs.mean()
-                            wandb_log[f"ClassConfidence/{phase}_class{class_id}_{modality}_std"] = confs.std()
-                
-                wandb_log[f"ClassConfidence/{phase}_task"] = self._cur_task
-                wandb_log[f"ClassConfidence/{phase}_epoch"] = fusion_module.current_epoch if hasattr(fusion_module, 'current_epoch') else -1
-                
-                wandb.log(wandb_log)
-                logging.info(f"✅ Logged class-wise confidences to wandb ({phase})")
-        else:
-            logging.info(f"⚠️  No confidence data collected")
-    
     def _setup_epoch_and_collect_confidence(self, epoch):
         """
         Epoch 설정 및 특정 시점에 class별 confidence 수집
@@ -472,11 +348,6 @@ class MMEABaseLearner(BaseLearner):
         is_first_epoch = (epoch == 0)
         is_frozen_epoch = (epoch == pretrain_epochs)
         is_last_epoch = (epoch == self._epochs - 1)
-        
-        # 🎯 특정 epoch 시작 시점에 class별 confidence 수집
-        if is_first_epoch or is_frozen_epoch or is_last_epoch:
-            phase = "START" if is_first_epoch else ("FROZEN" if is_frozen_epoch else "END")
-            self._collect_class_confidences(phase)
         
         return is_first_epoch, is_frozen_epoch, is_last_epoch
     
@@ -675,7 +546,7 @@ class MMEABaseLearner(BaseLearner):
             for m in self._modality:
                 inputs[m] = inputs[m].to(self._device)
             with torch.no_grad():
-                outputs = self._network(inputs)["logits"]
+                outputs = self._network(inputs, targets=targets.to(self._device))["logits"]
             predicts = torch.topk(
                 outputs, k=self.topk, dim=1, largest=True, sorted=True
             )[
@@ -690,9 +561,6 @@ class MMEABaseLearner(BaseLearner):
         """Evaluate only CL accuracy"""
         logging.info(f"=== Task {self._cur_task} CL Evaluation ===")
         logging.info(f"Known classes: 0-{self._classes_seen_so_far-1}")
-        
-        # 🎯 Test 시점에 class별 confidence 수집
-        self._collect_class_confidences("TEST")
         
         # Standard CL accuracy evaluation
         cl_metrics = {}
@@ -788,8 +656,18 @@ class MMEABaseLearner(BaseLearner):
         self._cached_ood_data = {'features': ood_features, 'labels': ood_labels}
 
         # 🔥 Auxiliary outputs 사전 수집 (UnifiedOODDetector Hybrid 모드용)
+        _PROTO_OOD_METHODS = {
+            "MoAS", "MoAS_ConfidenceOnly", "MoAS_DistancePenalty", "MoAS_KLPenalty",
+            "MoAS_old",
+        }
+        _AUX_LOGIT_METHODS = set()
+
         def needs_auxiliary_outputs(method_name):
             """Check if method needs auxiliary outputs (auxiliary_logits, confidences)"""
+            if method_name in _PROTO_OOD_METHODS:
+                return True
+            if method_name in _AUX_LOGIT_METHODS:
+                return True
             return method_name.startswith(('MSP_Hybrid_', 'Energy_Hybrid_', 'MaxLogit_Hybrid_', 'Entropy_Hybrid_', 'ODIN_Hybrid_'))
         
         def needs_fusion_features(method_name):
@@ -817,41 +695,6 @@ class MMEABaseLearner(BaseLearner):
                 print(f"  ✅ Auxiliary outputs collected:")
                 print(f"     - Main logits: ✅")
                 print(f"     - Auxiliary logits: {list(id_auxiliary_outputs.get('auxiliary_logits', {}).keys())}")
-                print(f"     - Confidences: {list(id_auxiliary_outputs.get('confidences', {}).keys())}")
-
-                # ─── [α-Diag] task별 α_m 통계 로깅 + wandb 기록 ────────────
-                confs = id_auxiliary_outputs.get('confidences', {})
-                if confs:
-                    modality_names = list(confs.keys())
-                    conf_stacked = torch.stack(
-                        [confs[m] for m in modality_names], dim=0
-                    )  # [M, N]
-                    alpha = torch.softmax(conf_stacked, dim=0)  # [M, N]
-                    alpha_np = alpha.detach().cpu().numpy()
-
-                    logging.info(f"[α-Diag] Task {self._cur_task} | ID set α_m stats (N={alpha_np.shape[1]}):")
-                    for i, mod in enumerate(modality_names):
-                        a = alpha_np[i]
-                        logging.info(
-                            f"  α_{mod}: mean={a.mean():.4f}, std={a.std():.4f}, "
-                            f"min={a.min():.4f}, max={a.max():.4f}"
-                        )
-                    per_sample_std = alpha_np.std(axis=0)  # [N]
-                    logging.info(
-                        f"  per-sample std: mean={per_sample_std.mean():.4f}, "
-                        f"max={per_sample_std.max():.4f}  "
-                        f"(uniform→0.0, one-hot→{((2/3)**0.5)/3:.4f})"
-                    )
-
-                    if self.args.get('use_wandb', False):
-                        log_dict = {}
-                        for i, mod in enumerate(modality_names):
-                            a = alpha_np[i]
-                            log_dict[f"alpha_diag/{mod}_mean"] = float(a.mean())
-                            log_dict[f"alpha_diag/{mod}_std"]  = float(a.std())
-                        log_dict["alpha_diag/per_sample_std_mean"] = float(per_sample_std.mean())
-                        wandb.log(log_dict, step=self._cur_task)
-                # ──────────────────────────────────────────────────────────────
 
                 # ─── [Logit-Diag] 클래스별 energy + 4가지 방법 α 비교 출력 ──
                 if self.args.get('debug_mode', False):
@@ -902,6 +745,63 @@ class MMEABaseLearner(BaseLearner):
                     from ood import ODINDetector
                     detector = ODINDetector(self._network, self._device, temperature=1000.0, magnitude=0.0014)
                 
+                # 🔬 Prototype-based OOD Methods
+                # Score 계산은 아래 needs_auxiliary_outputs 분기에서 수행
+                elif method_name in _PROTO_OOD_METHODS:
+                    fusion = getattr(self._network, 'fusion', None) or \
+                             getattr(self._network, 'fusion_network', None)
+                    if fusion is None or not getattr(fusion, '_prototypes', {}):
+                        logging.warning(f"[{method_name}] Prototypes not available — skipping")
+                        continue
+
+                    _alpha_temp = self.args.get('alpha_temp', 1.0)
+                    _ood_beta   = self.args.get('ood_beta', 1.0)
+                    _ood_gamma  = self.args.get('ood_gamma', 0.5)
+                    _proto_kwargs = dict(
+                        prototypes=fusion._prototypes,
+                        dist_stats=fusion._dist_stats,
+                        modality=self._modality,
+                        device=self._device,
+                        alpha_temp=_alpha_temp,
+                    )
+                    _raw_logit_arrays = getattr(fusion, '_raw_logit_arrays', {})
+                    _raw_proto_kwargs = dict(
+                        prototypes=fusion._prototypes,
+                        raw_logit_arrays=_raw_logit_arrays,
+                        dist_stats=fusion._dist_stats,
+                        modality=self._modality,
+                        device=self._device,
+                        alpha_temp=_alpha_temp,
+                    )
+
+                    if method_name == "MoAS":
+                        from ood.methods.knn_prototype_penalty_score import MoASDetector
+                        if not _raw_logit_arrays:
+                            logging.warning("[MoAS] raw_logit_arrays not available — skipping")
+                            continue
+                        detector = MoASDetector(**_raw_proto_kwargs, beta=_ood_beta, gamma=_ood_gamma)
+
+                    elif method_name == "MoAS_ConfidenceOnly":
+                        from ood.methods.knn_prototype_penalty_score import MoASConfidenceOnlyDetector
+                        if not _raw_logit_arrays:
+                            logging.warning("[MoAS_ConfidenceOnly] raw_logit_arrays not available — skipping")
+                            continue
+                        detector = MoASConfidenceOnlyDetector(**_raw_proto_kwargs)
+
+                    elif method_name == "MoAS_DistancePenalty":
+                        from ood.methods.knn_prototype_penalty_score import MoASDistancePenaltyDetector
+                        if not _raw_logit_arrays:
+                            logging.warning("[MoAS_DistancePenalty] raw_logit_arrays not available — skipping")
+                            continue
+                        detector = MoASDistancePenaltyDetector(**_raw_proto_kwargs, beta=_ood_beta)
+
+                    elif method_name == "MoAS_KLPenalty":
+                        from ood.methods.knn_prototype_penalty_score import MoASKLPenaltyDetector
+                        if not _raw_logit_arrays:
+                            logging.warning("[MoAS_KLPenalty] raw_logit_arrays not available — skipping")
+                            continue
+                        detector = MoASKLPenaltyDetector(**_raw_proto_kwargs, gamma=_ood_gamma)
+
                 else:
                     logging.warning(f"⚠️  Unknown OOD method: {method_name}")
                     continue
@@ -1043,8 +943,8 @@ class MMEABaseLearner(BaseLearner):
                             ood_transformed_logits = self._network.classifier(ood_transformed)
                         else:
                             logging.error(f"  ❌ Network has no 'fc' or 'classifier' layer!")
-                        continue
-                    
+                            continue
+
                     # Compute Energy scores
                     id_scores = torch.logsumexp(id_transformed_logits, dim=1).cpu().numpy()
                     ood_scores = torch.logsumexp(ood_transformed_logits, dim=1).cpu().numpy()
@@ -1063,8 +963,6 @@ class MMEABaseLearner(BaseLearner):
                     logging.info(f"  📊 Computing {method_name} with auxiliary outputs...")
                     logging.info(f"     - Main logits: {id_auxiliary_outputs['logits'].shape}")
                     logging.info(f"     - Auxiliary logits: {list(id_auxiliary_outputs['auxiliary_logits'].keys())}")
-                    if 'confidences' in id_auxiliary_outputs:
-                        logging.info(f"     - Confidences: {list(id_auxiliary_outputs['confidences'].keys())}")
                     
                     try:
                         id_scores = detector.compute_scores_from_outputs(id_auxiliary_outputs)
@@ -1161,34 +1059,36 @@ class MMEABaseLearner(BaseLearner):
         
         return ood_results, score_distributions, ood_methods_metrics
 
-    def _compute_energy_stats_from_memory(self, data_manager):
+    def _compute_class_prototypes_from_memory(self, data_manager, include_main: bool = False):
         """
-        [Step 1.6 수정] Memory buffer 데이터 기반으로 modality별 energy mean/std 계산.
+        Replay-buffer 기반으로 per-modality per-class prototype과 distance statistics를 계산.
 
-        수정 이유:
-          (1) Train set 데이터는 현재 task에 편향되어 있어 energy 분포 추정에 부적합할 수 있음.
-          (2) memory buffer는 prev/current task 데이터가 균형적으로 포함되어 있어
-              energy 분포 추정에 더 적합함.
-          (3) inference_mode_evaluation에서 memory가 구성되어 있지 않으므로
-              build_rehearsal_memory 호출하여 memory를 구성함.
-          
-        Test: (1) memory 없음 → E_uniform fallback 사용 (stats 미주입)
-              (2) memory 있음 → memory 기반 energy stats 사용
+        계산 내용:
+          proto[m][c]    = mean(z_m | label == c)  over buffer samples
+          mu_dist[m]     = mean(min_c ||z_m - proto[m][c]||)  over buffer samples
+          sigma_dist[m]  = std(...)  over buffer samples
+
+        결과를 fusion.set_prototypes()로 주입.
         """
+        import numpy as _np
+
         fusion = getattr(self._network, 'fusion', None)
         if fusion is None:
             fusion = getattr(self._network, 'fusion_network', None)
         if fusion is None or not hasattr(fusion, 'auxiliary_heads'):
-            logging.info("[EnergyStats] No auxiliary heads – skipping energy stats computation")
+            logging.info("[ProtoStats] No auxiliary heads — skipping prototype computation")
+            return
+        if not hasattr(fusion, 'set_prototypes'):
+            logging.info("[ProtoStats] fusion has no set_prototypes — skipping")
             return
 
-        memory = self._get_memory()  # None if empty
+        memory = self._get_memory()
         if memory is None:
-            logging.info("[EnergyStats] No memory buffer (Task 0 or empty) – E_uniform fallback will be used")
-            return  # fusion._energy_stats = {} → _compute_confidence()가 E_uniform fallback 사용
+            logging.info("[ProtoStats] No memory buffer — skipping prototype computation")
+            return
 
         data_mem, targets_mem = memory
-        logging.info(f"[EnergyStats] Computing energy stats from memory buffer ({len(data_mem)} samples) ...")
+        logging.info(f"[ProtoStats] Computing class prototypes from buffer ({len(data_mem)} samples)...")
 
         mem_dataset = data_manager.get_dataset(
             [], source="train", mode="test",
@@ -1202,52 +1102,102 @@ class MMEABaseLearner(BaseLearner):
         )
 
         self._network.eval()
-        energy_accum = {mod: [] for mod in self._modality}
 
-        # stats 계산 forward pass 중에는 [α-Diag] 로깅 플래그를 비활성화
-        # → 플래그가 소진되지 않아 실제 평가 시 norm=zscore 로그가 정상 출력됨
-        for mod_name in ['RGB', 'Gyro', 'Acce']:
-            setattr(fusion, f'_energy_logged_{mod_name}', True)  # suppress during stats computation
+        # Suppress logging flags during stats forward pass
+        for mod_name in self._modality:
+            setattr(fusion, f'_energy_logged_{mod_name}', True)
+
+        # Accumulate: {m: {class_idx: [logit_vec, ...]}}
+        # include_main=True의 경우 "main" 키도 포함
+        accum_keys = self._modality + (["main"] if include_main else [])
+        logit_accum = {m: {} for m in accum_keys}
 
         with torch.no_grad():
-            for i, (_, inputs, _) in enumerate(
-                tqdm(mem_loader, desc="EnergyStats(memory) forward", leave=False)
+            for i, (_, inputs, labels) in enumerate(
+                tqdm(mem_loader, desc="ProtoStats(memory) forward", leave=False)
             ):
                 if self.args.get("debug_mode") and i >= 10:
                     break
                 if isinstance(inputs, dict):
-                    for m in inputs:
-                        inputs[m] = inputs[m].to(self._device)
+                    for mod in inputs:
+                        inputs[mod] = inputs[mod].to(self._device)
                 else:
                     inputs = inputs.to(self._device)
 
                 outputs = self._network(inputs)
                 aux_logits = outputs.get('auxiliary_logits', {})
-                for mod, logits in aux_logits.items():
-                    energy = -torch.logsumexp(logits, dim=1)  # [B]
-                    energy_accum[mod].append(energy.cpu())
 
-        energy_stats = {}
-        for mod, tensors in energy_accum.items():
-            if not tensors:
+                for m in self._modality:
+                    if m not in aux_logits:
+                        continue
+                    z_m = aux_logits[m].float().cpu().numpy()  # [B, C]
+                    for j, lbl in enumerate(labels.numpy()):
+                        lbl = int(lbl)
+                        if lbl not in logit_accum[m]:
+                            logit_accum[m][lbl] = []
+                        logit_accum[m][lbl].append(z_m[j])
+
+                # z_main 수집 (include_main=True 시)
+                if include_main and "logits" in outputs:
+                    z_main_np = outputs["logits"].float().cpu().numpy()  # [B, C]
+                    for j, lbl in enumerate(labels.numpy()):
+                        lbl = int(lbl)
+                        if lbl not in logit_accum["main"]:
+                            logit_accum["main"][lbl] = []
+                        logit_accum["main"][lbl].append(z_main_np[j])
+
+        # Build prototypes and distance statistics
+        prototypes = {}
+        dist_stats = {}
+        for m in accum_keys:
+            if not logit_accum[m]:
                 continue
-            all_e = torch.cat(tensors, dim=0)  # [N]
-            e_mean = all_e.mean().item()
-            e_std  = all_e.std().item()
-            energy_stats[mod] = (e_mean, e_std)
+            # proto[m][c] = mean logit vector
+            proto_m = {}
+            for c, vecs in logit_accum[m].items():
+                proto_m[c] = _np.mean(vecs, axis=0)  # [C]
+            prototypes[m] = proto_m
+
+            # Nearest-prototype distance over all buffer samples
+            all_protos = _np.array(list(proto_m.values()))  # [num_classes, C]
+            dists = []
+            for c, vecs in logit_accum[m].items():
+                for z in vecs:
+                    diff = z[None, :] - all_protos  # [num_classes, C]
+                    raw_dist = _np.linalg.norm(diff, axis=1).min()
+                    dists.append(raw_dist)
+
+            dists = _np.array(dists)
+            mu_d = float(dists.mean())
+            sig_d = float(dists.std()) + 1e-8
+            dist_stats[m] = (mu_d, sig_d)
             logging.info(
-                f"[EnergyStats] {mod}: mean={e_mean:.4f}, std={e_std:.4f}  "
-                f"(N={all_e.numel()})"
+                f"[ProtoStats] {m}: {len(proto_m)} classes, "
+                f"μ_dist={mu_d:.4f}, σ_dist={sig_d:.4f}  (N={len(dists)})"
             )
 
-        if energy_stats:
-            fusion.set_energy_stats(energy_stats)
-            logging.info("[EnergyStats] ✅ Memory-based energy stats injected into fusion module")
-            # stats 주입 후 플래그 리셋 → 실제 평가 시 norm=zscore 로그 출력
-            for mod_name in ['RGB', 'Gyro', 'Acce']:
-                setattr(fusion, f'_energy_logged_{mod_name}', False)
+        # Reset logging flags
+        for mod_name in self._modality:
+            setattr(fusion, f'_energy_logged_{mod_name}', False)
+
+        if prototypes:
+            fusion.set_prototypes(prototypes, dist_stats)
+            logging.info("[ProtoStats] ✅ Class prototypes injected into fusion module")
+
+            # Inject raw logit arrays for distance-metric OOD detectors
+            if hasattr(fusion, 'set_raw_logit_arrays'):
+                # Convert list[np.ndarray] values to keep same format
+                raw_logit_arrays = {
+                    m: {c: vecs for c, vecs in cls_dict.items()}
+                    for m, cls_dict in logit_accum.items()
+                    if cls_dict
+                }
+                fusion.set_raw_logit_arrays(raw_logit_arrays)
+                logging.info("[ProtoStats] ✅ Raw logit arrays injected into fusion module")
         else:
-            logging.warning("[EnergyStats] ⚠️  No auxiliary logits found – stats not set")
+            logging.warning("[ProtoStats] ⚠️  No auxiliary logits found — prototypes not set")
+
+
 
     def load_checkpoint(self, checkpoint_path):
         """Load model from checkpoint for inference"""
@@ -1276,12 +1226,22 @@ class MMEABaseLearner(BaseLearner):
         else:
             logging.warning("⚠️  No class means found in checkpoint - NME evaluation will be unavailable")
 
-        # ── MoAS energy stats 복원 ────────────────────────────────────────
-        if 'energy_stats' in checkpoint:
-            fusion = getattr(self._network, 'fusion', None) or getattr(self._network, 'fusion_network', None)
-            if fusion is not None and hasattr(fusion, 'set_energy_stats'):
-                fusion.set_energy_stats(checkpoint['energy_stats'])
-                logging.info(f"[MemoryLoad] ✅ Energy stats restored from checkpoint: {list(checkpoint['energy_stats'].keys())}")
+        # ── Prototype Distance stats 복원 ─────────────────────────────────
+        # 새 checkpoint 로드 시 항상 기존 prototypes 초기화 (task 간 stale prototype 방지)
+        fusion = getattr(self._network, 'fusion', None) or getattr(self._network, 'fusion_network', None)
+        if fusion is not None and hasattr(fusion, '_prototypes'):
+            fusion._prototypes = {}
+            fusion._dist_stats = {}
+            if hasattr(fusion, '_raw_logit_arrays'):
+                fusion._raw_logit_arrays = {}
+        if 'prototypes' in checkpoint and 'dist_stats' in checkpoint:
+            if fusion is not None and hasattr(fusion, 'set_prototypes'):
+                fusion.set_prototypes(checkpoint['prototypes'], checkpoint['dist_stats'])
+                logging.info(f"[MemoryLoad] ✅ Prototypes restored from checkpoint: {list(checkpoint['prototypes'].keys())}")
+        if 'raw_logit_arrays' in checkpoint:
+            if fusion is not None and hasattr(fusion, 'set_raw_logit_arrays'):
+                fusion.set_raw_logit_arrays(checkpoint['raw_logit_arrays'])
+                logging.info(f"[MemoryLoad] ✅ Raw logit arrays restored from checkpoint: {list(checkpoint['raw_logit_arrays'].keys())}")
         # ─────────────────────────────────────────────────────────────────
 
         self._network.eval()
@@ -1325,14 +1285,6 @@ class MMEABaseLearner(BaseLearner):
         
         # Load checkpoint with correct classifier size
         checkpoint = self.load_checkpoint(checkpoint_path)
-        energy_stats_loaded = 'energy_stats' in checkpoint
-
-        # ─── task별 energy 로깅 플래그 리셋 ────────────────────────────
-        fusion = getattr(self._network, 'fusion', None)
-        if fusion is not None:
-            for mod in ['RGB', 'Gyro', 'Acce']:
-                setattr(fusion, f'_energy_logged_{mod}', False)
-        # ────────────────────────────────────────────────────────────────
 
         # Ensure model is on correct device
         self._network = self._network.to(self._device)
@@ -1346,15 +1298,36 @@ class MMEABaseLearner(BaseLearner):
             logging.error("❌ test_loader is not set properly!")
             raise AttributeError("test_loader was not set up correctly")
 
-        # ── Energy stats: checkpoint에 있으면 재계산 생략 ──────────────
-        if energy_stats_loaded:
-            logging.info("[EnergyStats] ✅ Loaded from checkpoint — skipping build_rehearsal_memory")
-        else:
-            # Fallback: legacy checkpoint (no energy_stats) → rebuild memory and recompute
-            logging.info("[EnergyStats] Not in checkpoint — rebuilding memory to compute stats")
-            self.build_rehearsal_memory(data_manager, self.samples_per_class)
-            logging.info(f"[MemoryBuild] Memory built: {len(self._data_memory)} samples")
-            self._compute_energy_stats_from_memory(data_manager)
+        # ── Prototype 기반 OOD methods: checkpoint에 있으면 복원된 것 사용, 없으면 재계산 ──
+        _PROTO_REQUIRED = {
+            "MoAS", "MoAS_ConfidenceOnly", "MoAS_DistancePenalty", "MoAS_KLPenalty",
+        }
+        if _PROTO_REQUIRED & set(self.args.get("ood_methods", [])):
+            fusion = getattr(self._network, 'fusion', None) or \
+                     getattr(self._network, 'fusion_network', None)
+            proto_loaded = (
+                fusion is not None
+                and getattr(fusion, '_prototypes', {})       # non-empty prototypes
+                and getattr(fusion, '_raw_logit_arrays', {}) # AND raw logit arrays needed for kNN
+            )
+            if proto_loaded:
+                logging.info("[ProtoStats] ✅ Prototypes + raw logit arrays loaded from checkpoint — skipping recompute")
+            else:
+                logging.info("[ProtoStats] Not in checkpoint — rebuilding full buffer for prototype computation")
+                self._data_memory = []
+                self._targets_memory = []
+                if hasattr(self, '_modality_logits_memory'):
+                    from collections import defaultdict
+                    self._modality_logits_memory = defaultdict(lambda: np.array([]))
+                _saved_known = self._known_classes
+                self._known_classes = 0
+                self.build_rehearsal_memory(data_manager, self.samples_per_class)
+                self._known_classes = _saved_known
+                self._compute_class_prototypes_from_memory(
+                    data_manager, include_main=False
+                )
+
+
         # Perform evaluation
         if self.enable_ood:
             # Perform both CL and OOD evaluation
@@ -1407,27 +1380,18 @@ class MMEABaseLearner(BaseLearner):
 
     def _collect_outputs(self, loader):
         """
-        모델의 전체 outputs를 수집 (auxiliary_logits, confidences, modality_weights 포함)
-        
-        Args:
-            loader: DataLoader
-            
+        모델의 전체 outputs를 수집 (auxiliary_logits, modality_weights 포함)
+
         Returns:
-            dict: 집계된 outputs {
-                'logits': tensor,
-                'auxiliary_logits': {modality: tensor},
-                'confidences': {modality: tensor},
-                'modality_weights': tensor
-            }
+            dict: {'logits': tensor, 'auxiliary_logits': {modality: tensor}, 'modality_weights': tensor}
             또는 None (auxiliary head fusion이 아닌 경우)
         """
         self._network.eval()
-        
+
         all_logits = []
         all_auxiliary_logits = {}
-        all_confidences = {}
         all_modality_weights = []
-        
+
         with torch.no_grad():
             for _, inputs, targets in tqdm(loader, desc="Collecting outputs", leave=False):
                 if isinstance(inputs, dict):
@@ -1437,54 +1401,32 @@ class MMEABaseLearner(BaseLearner):
                     inputs = inputs.to(self._device)
                 targets = targets.to(self._device)
 
-                # Forward pass
                 outputs = self._network(inputs, targets=targets)
-                
-                # Check if this is auxiliary head fusion
+
                 if 'auxiliary_logits' not in outputs or not outputs['auxiliary_logits']:
-                    return None  # Not auxiliary head fusion
-                
-                # Collect logits
+                    return None
+
                 all_logits.append(outputs['logits'].cpu())
-                
-                # Collect auxiliary logits
+
                 for modality, aux_logits in outputs['auxiliary_logits'].items():
                     if modality not in all_auxiliary_logits:
                         all_auxiliary_logits[modality] = []
                     all_auxiliary_logits[modality].append(aux_logits.cpu())
-                
-                # Collect confidences
-                if 'confidences' in outputs and outputs['confidences']:
-                    for modality, conf in outputs['confidences'].items():
-                        if modality not in all_confidences:
-                            all_confidences[modality] = []
-                        all_confidences[modality].append(conf.cpu())
-                
-                # Collect modality weights
+
                 if 'modality_weights' in outputs and outputs['modality_weights'] is not None:
                     all_modality_weights.append(outputs['modality_weights'].cpu())
-        
-        # Concatenate all batches
-        result = {
-            'logits': torch.cat(all_logits, dim=0)
-        }
-        
-        # Concatenate auxiliary logits
+
+        result = {'logits': torch.cat(all_logits, dim=0)}
+
         if all_auxiliary_logits:
-            result['auxiliary_logits'] = {}
-            for modality, logits_list in all_auxiliary_logits.items():
-                result['auxiliary_logits'][modality] = torch.cat(logits_list, dim=0)
-        
-        # Concatenate confidences
-        if all_confidences:
-            result['confidences'] = {}
-            for modality, conf_list in all_confidences.items():
-                result['confidences'][modality] = torch.cat(conf_list, dim=0)
-        
-        # Concatenate modality weights
+            result['auxiliary_logits'] = {
+                modality: torch.cat(logits_list, dim=0)
+                for modality, logits_list in all_auxiliary_logits.items()
+            }
+
         if all_modality_weights:
             result['modality_weights'] = torch.cat(all_modality_weights, dim=0)
-        
+
         return result
     
     def _extract_data_batch(self, loader, extract_features=True, extract_logits=True, extract_individual_features=False):

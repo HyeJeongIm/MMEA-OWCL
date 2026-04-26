@@ -96,7 +96,7 @@ class MAND(Replay):
 
         self._train(self.train_loader, self.test_loader)
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
-        self._compute_energy_stats_from_memory(data_manager)
+        self._compute_class_prototypes_from_memory(data_manager)
 
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
@@ -772,64 +772,6 @@ class MAND(Replay):
     # Class-wise confidence logging (diagnostic, same logic as MMEADER)
     # ------------------------------------------------------------------
 
-    def _collect_class_confidences(self, phase):
-        fusion_module = None
-        if hasattr(self._network, "fusion"):
-            fusion_module = self._network.fusion
-        elif hasattr(self._network, "fusion_network"):
-            fusion_module = self._network.fusion_network
-
-        if fusion_module is None or not hasattr(fusion_module, "auxiliary_heads"):
-            logging.info(f"[MAND] No auxiliary_heads in fusion — skipping confidence logging")
-            return
-
-        loader = self.test_loader if phase == "TEST" else self.train_loader
-        class_confidences = {}
-
-        was_training = self._network.training
-        self._network.eval()
-
-        with torch.no_grad():
-            for batch in tqdm(loader, desc=f"Collecting confidences ({phase})", leave=False):
-                if len(batch) == 4:
-                    _, inputs, targets, _ = batch
-                else:
-                    _, inputs, targets = batch
-
-                for m in self._modality:
-                    inputs[m] = inputs[m].to(self._device)
-                targets = targets.to(self._device)
-
-                outputs = self._network(inputs, targets=targets)
-                if "confidences" not in outputs or not outputs["confidences"]:
-                    continue
-
-                confidences_dict = outputs["confidences"]
-                for i, target in enumerate(targets):
-                    class_id = target.item()
-                    if class_id not in class_confidences:
-                        class_confidences[class_id] = {mod: [] for mod in self._modality}
-                    for modality in self._modality:
-                        if modality in confidences_dict:
-                            class_confidences[class_id][modality].append(
-                                confidences_dict[modality][i].item()
-                            )
-
-        if was_training:
-            self._network.train()
-
-        if class_confidences:
-            logging.info(f"[MAND] Class-wise confidence ({phase}):")
-            for class_id in sorted(class_confidences.keys()):
-                logging.info(f"  Class {class_id}:")
-                for modality in self._modality:
-                    confs = np.array(class_confidences[class_id].get(modality, []))
-                    if len(confs) > 0:
-                        logging.info(
-                            f"    {modality}: mean={confs.mean():.4f}, std={confs.std():.4f}, "
-                            f"min={confs.min():.4f}, max={confs.max():.4f}, n={len(confs)}"
-                        )
-
     # ------------------------------------------------------------------
     # Checkpoint
     # ------------------------------------------------------------------
@@ -844,10 +786,13 @@ class MAND(Replay):
         if hasattr(self, "_class_means"):
             save_dict["class_means"] = self._class_means
 
-        # MoAS energy stats — lightweight alternative to saving the full memory buffer
+        # Prototype Distance Adaptive Weighting stats
         fusion = getattr(self._network, "fusion", None) or getattr(self._network, "fusion_network", None)
-        if fusion is not None and hasattr(fusion, "_energy_stats") and fusion._energy_stats:
-            save_dict["energy_stats"] = fusion._energy_stats
+        if fusion is not None and hasattr(fusion, "_prototypes") and fusion._prototypes:
+            save_dict["prototypes"] = fusion._prototypes
+            save_dict["dist_stats"] = fusion._dist_stats
+            if hasattr(fusion, "_raw_logit_arrays") and fusion._raw_logit_arrays:
+                save_dict["raw_logit_arrays"] = fusion._raw_logit_arrays
 
         beta = self.morst_beta
         lambda_val = self.args.get("morst_lambda", self.args.get("aux_loss_weight", 0.5))
@@ -855,8 +800,7 @@ class MAND(Replay):
 
         weights_dir = os.path.join(weights_dir, param_subdir)
         os.makedirs(weights_dir, exist_ok=True)
-        n_stats = len(save_dict.get("energy_stats", {}))
-        logging.info(f"[MAND] Saving checkpoint to: {param_subdir} (energy_stats: {n_stats} modalities)")
+        logging.info(f"[MAND] Saving checkpoint to: {param_subdir}")
 
         torch.save(save_dict, "{}/{}_{}.pkl".format(weights_dir, filename, self._cur_task))
 

@@ -7,10 +7,7 @@ Usage:
     
     # Short options 사용 (빠르고 편리!)
     python main.py -d mmea -m tbn_replay -f concat
-    python main.py -d mmea -m tbn_mand -f mand_fusion -c energy 
-    
-    # Long options 사용 (명확함)
-    python main.py -d mmea -m tbn_mand --fusion mand_fusion --confidence energy --device 0
+    python main.py -d mmea -m tbn_mand -f mand_fusion --device 0
     
     # Multi-GPU
     python main.py -d mmea -m tbn_replay -g 0 1
@@ -39,8 +36,6 @@ def main():
     parser.add_argument('-m', '--model_name', type=str, required=True, help='모델/실험 이름 (exps/exp_<name>.json)')
     parser.add_argument('-f', '--fusion_type', type=str,
                         help='Fusion 방법 선택 (JSON 설정을 덮어씀, 예: mand_fusion, concat, attention)')
-    parser.add_argument('-c', '--confidence', type=str,
-                        help='Confidence 계산 방법 (JSON 설정을 덮어씀, 예: energy, max_prob, entropy)')
     parser.add_argument('-g', '--device', type=int, nargs='+',
                         help='GPU device ID(s) 선택 (예: --device 0 또는 -g 0, JSON 설정을 덮어씀)')
     parser.add_argument('--wandb_project', type=str, default='MMEA-OWCL_hj_test')
@@ -60,14 +55,7 @@ def main():
         config = json.load(f)
 
     # ------------- 3) argparse 값이 JSON을 덮어씀 (우선순위: JSON < argparse) -------------
-    # confidence -> confidence_method로 매핑
-    # ⚠️  중요: confidence_method는 config에만 저장되고 파일 경로에는 포함되지 않음
-    #     - 이유: v2_7+는 1:1:1 균등 가중치를 사용하므로 학습된 가중치가 동일
-    #     - 학습 시: 고정된 경로에 저장 (confidence_method 무관)
-    #     - 평가 시: 동일한 가중치를 불러와서 confidence_method만 config로 전달
     args_dict = vars(args)
-    if args_dict.get('confidence') is not None:
-        args_dict['confidence_method'] = args_dict.pop('confidence')
     
     # device 처리: list로 변환 (JSON 형식과 일치)
     if args_dict.get('device') is not None:
@@ -131,7 +119,6 @@ def main():
     print(f"✓ Fusion Type  : {config.get('fusion_type')}")
     print(f"✓ Modalities   : {config.get('modality')}")
     print(f"✓ Tasks        : Initial {config.get('init_cls')} + {config.get('increment')} each increment")
-    print(f"✓ Confidence   : {config.get('confidence_method', 'max_prob (default)')}")
     print(f"✓ Device(s)    : {config.get('device', [0])}")
     print(f"✓ OOD Methods  : {config.get('ood_methods')}")
     print(f"✓ Use W&B      : {bool(config.get('use_wandb'))}")

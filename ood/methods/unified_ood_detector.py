@@ -36,36 +36,20 @@ class UnifiedOODDetector(BaseOODDetector):
         - 'baseline': Main logits만 사용
         - 'hybrid_uniform_sum': Main + Aux logits, 각 모달리티 가중치 1:1:1 (합산)
         - 'hybrid_uniform_average': Main (1) + Aux logits (각 1/N, N=모달리티 개수)
-        - 'hybrid_conf_raw': Main logits (가중치 1) + Auxiliary logits (raw confidence로 가중)
-        - 'hybrid_conf_normalized': Main logits (가중치 1) + Auxiliary logits (normalized confidence로 가중)
-    
-    Hybrid 모드 핵심:
-        - Main logits는 **항상 가중치 1**로 포함
-        - Auxiliary logits는 모드에 따라 다른 가중치 적용
-        - 최종 fused logits = Main (×1) + Σ(Auxiliary_i × weight_i)
-    
+
     사용 예시:
-        # 방법 1: Config로 직접 생성
         detector = UnifiedOODDetector(model, config={'method': 'msp', 'mode': 'baseline'})
-        
-        # 방법 2: Method name으로 자동 생성 (추천)
         detector = UnifiedOODDetector.from_method_name(model, 'MSP_Baseline')
-        detector = UnifiedOODDetector.from_method_name(model, 'Energy_Hybrid_ConfRaw')
         detector = UnifiedOODDetector.from_method_name(model, 'MaxLogit_Hybrid_UniformSum')
     """
     
     VALID_METHODS = ['msp', 'energy', 'maxlogit', 'lts', 'react', 'scale', 'ash_s', 'odin', 'entropy']
-    VALID_MODES = ['baseline', 'hybrid_uniform_sum', 'hybrid_uniform_average', 'hybrid_conf_raw', 'hybrid_conf_normalized']
-    
-    # Method name to config 매핑
+    VALID_MODES = ['baseline', 'hybrid_uniform_sum', 'hybrid_uniform_average']
+
     METHOD_NAME_MAPPING = {
-        # Baseline으로 끝나는 경우
         'baseline': 'baseline',
-        # Hybrid로 시작하는 경우
         'uniformsum': 'hybrid_uniform_sum',
         'uniformaverage': 'hybrid_uniform_average',
-        'confraw': 'hybrid_conf_raw',
-        'confnormalized': 'hybrid_conf_normalized',
     }
     
     def __init__(self, model, device='cuda', config=None):
@@ -75,7 +59,7 @@ class UnifiedOODDetector(BaseOODDetector):
             device: 디바이스 ('cuda' or 'cpu')
             config: 설정 딕셔너리
                 - method: OOD 방법론 ('msp', 'energy', 'maxlogit')
-                - mode: 동작 모드 ('baseline', 'hybrid_uniform_sum', 'hybrid_uniform_average', 'hybrid_conf_raw', 'hybrid_conf_normalized')
+                - mode: 동작 모드 ('baseline', 'hybrid_uniform_sum', 'hybrid_uniform_average')
                 - temperature: Energy용 temperature 파라미터 (기본값: 1.0)
         """
         super().__init__(model, device)
@@ -143,9 +127,6 @@ class UnifiedOODDetector(BaseOODDetector):
             >>> UnifiedOODDetector.parse_method_name("MSP_Baseline")
             {'method': 'msp', 'mode': 'baseline'}
             
-            >>> UnifiedOODDetector.parse_method_name("Energy_Hybrid_ConfRaw")
-            {'method': 'energy', 'mode': 'hybrid_conf_raw', 'temperature': 1.0}
-            
             >>> UnifiedOODDetector.parse_method_name("MaxLogit_Hybrid_UniformSum")
             {'method': 'maxlogit', 'mode': 'hybrid_uniform_sum'}
         """
@@ -168,17 +149,12 @@ class UnifiedOODDetector(BaseOODDetector):
         if len(mode_parts) == 1 and mode_parts[0].lower() == 'baseline':
             mode = 'baseline'
         elif len(mode_parts) >= 2 and mode_parts[0].lower() == 'hybrid':
-            # Hybrid_UniformSum, Hybrid_UniformAverage, Hybrid_ConfRaw, Hybrid_ConfNormalized
-            mode_suffix = ''.join(mode_parts[1:]).lower()  # "uniformsum", "uniformaverage", "confraw", "confnormalized"
-            
+            mode_suffix = ''.join(mode_parts[1:]).lower()
+
             if mode_suffix == 'uniformsum':
                 mode = 'hybrid_uniform_sum'
             elif mode_suffix == 'uniformaverage':
                 mode = 'hybrid_uniform_average'
-            elif mode_suffix == 'confraw':
-                mode = 'hybrid_conf_raw'
-            elif mode_suffix == 'confnormalized':
-                mode = 'hybrid_conf_normalized'
             else:
                 raise ValueError(f"Unknown hybrid mode: {mode_suffix}")
         else:
@@ -237,9 +213,7 @@ class UnifiedOODDetector(BaseOODDetector):
             outputs: 모델의 forward 출력 딕셔너리
                 - logits: Main logits [batch, num_classes] (필수)
                 - auxiliary_logits: {modality: tensor [batch, num_classes]} (hybrid modes에서 필수)
-                - confidences: {modality: tensor [batch]} (hybrid confidence modes에서 필수)
                 - fusion_features: tensor [batch, feature_dim] (LTS, feature transforms에서 필수)
-                - individual_features: dict/list of tensors (LTS hybrid modes에서 필수)
                 - raw_inputs: tensor (ODIN에서 필요, optional)
         
         Returns:
@@ -289,44 +263,21 @@ class UnifiedOODDetector(BaseOODDetector):
         """
         main_logits = outputs.get('logits', None)
         auxiliary_logits = outputs.get('auxiliary_logits', {})
-        confidences = outputs.get('confidences', {})
-        
-        # Hybrid 모드는 main logits 필수
+
         if main_logits is None:
-            raise ValueError(f"Hybrid mode requires 'logits' (main logits) in outputs, but got: {outputs.keys()}")
-        
-        # Hybrid 모드는 auxiliary logits 필수
+            raise ValueError(f"Hybrid mode requires 'logits' in outputs, but got: {outputs.keys()}")
         if not auxiliary_logits:
             raise ValueError(f"Hybrid mode requires 'auxiliary_logits' in outputs, but got: {outputs.keys()}")
-        
-        # 모달리티 순서 일관성 유지
+
         modalities = ['RGB', 'Gyro', 'Acce']
-        
-        # Logit level fusion: main + auxiliary
+
         if self.mode == 'hybrid_uniform_sum':
-            # Uniform sum: main (1) + auxiliary (1:1:1) — 각 모달리티 가중치 1
             fused_logits = self._fuse_logits_uniform_sum(main_logits, auxiliary_logits, modalities)
-        
         elif self.mode == 'hybrid_uniform_average':
-            # Uniform average: main(1) + auxiliary(각 1/N), N=모달리티 개수
             fused_logits = self._fuse_logits_uniform_average(main_logits, auxiliary_logits, modalities)
-        
-        elif self.mode == 'hybrid_conf_raw':
-            # Raw confidence: main (가중치 1) + auxiliary (raw confidence로 가중)
-            if not confidences:
-                raise ValueError(f"Hybrid_ConfRaw mode requires 'confidences' in outputs, but got: {outputs.keys()}")
-            fused_logits = self._fuse_logits_conf_raw(main_logits, auxiliary_logits, confidences, modalities)
-        
-        elif self.mode == 'hybrid_conf_normalized':
-            # Normalized confidence: main (가중치 1) + auxiliary (normalized confidence로 가중)
-            if not confidences:
-                raise ValueError(f"Hybrid_ConfNormalized mode requires 'confidences' in outputs, but got: {outputs.keys()}")
-            fused_logits = self._fuse_logits_conf_normalized(main_logits, auxiliary_logits, confidences, modalities)
-        
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
-        
-        # Fused logits에서 OOD score 계산
+
         return self._compute_scores_from_logits(fused_logits)
     
     def _fuse_logits_uniform_sum(self, main_logits, auxiliary_logits, modalities):
@@ -379,105 +330,6 @@ class UnifiedOODDetector(BaseOODDetector):
         
         return fused_logits
     
-    def _fuse_logits_conf_raw(self, main_logits, auxiliary_logits, confidences, modalities):
-        """
-        Main logits (가중치 1) + Auxiliary logits (raw confidence로 가중)를 fusion
-        
-        Args:
-            main_logits: tensor [batch, num_classes] - 가중치 1
-            auxiliary_logits: {modality: tensor [batch, num_classes]}
-            confidences: {modality: tensor [batch]}
-            modalities: 모달리티 리스트
-        
-        Returns:
-            fused_logits: [batch, num_classes]
-        """
-        batch_size = main_logits.size(0)
-        num_classes = main_logits.size(1)
-        
-        # Main logits (가중치 1)로 시작
-        fused_logits = main_logits * 1.0
-        
-        # Auxiliary logits를 raw confidence로 가중하여 추가
-        for modality in modalities:
-            if modality in auxiliary_logits and modality in confidences:
-                aux_logits = auxiliary_logits[modality]  # [batch, num_classes]
-                conf = confidences[modality]  # [batch]
-                
-                # Confidence를 가중치로 적용
-                weighted_logits = aux_logits * conf.unsqueeze(-1)  # [batch, num_classes]
-                fused_logits = fused_logits + weighted_logits
-        
-        return fused_logits
-    
-    def _fuse_logits_conf_normalized(self, main_logits, auxiliary_logits, confidences, modalities):
-        """
-        Main logits (가중치 1) + Auxiliary logits (normalized confidence로 가중)를 fusion
-        
-        Args:
-            main_logits: tensor [batch, num_classes] - 가중치 1
-            auxiliary_logits: {modality: tensor [batch, num_classes]}
-            confidences: {modality: tensor [batch]}
-            modalities: 모달리티 리스트
-        
-        Returns:
-            fused_logits: [batch, num_classes]
-        """
-        # Auxiliary confidences 수집
-        conf_list = []
-        aux_logits_list = []
-        
-        for modality in modalities:
-            if modality in auxiliary_logits and modality in confidences:
-                aux_logits_list.append(auxiliary_logits[modality])
-                conf_list.append(confidences[modality])
-        
-        # Main logits (가중치 1)로 시작
-        fused_logits = main_logits * 1.0
-        
-        # Auxiliary가 있으면 normalized confidence로 가중하여 추가
-        if conf_list:
-            # Stack: [num_modalities, batch]
-            conf_stacked = torch.stack(conf_list, dim=0)
-            # Stack: [num_modalities, batch, num_classes]
-            aux_logits_stacked = torch.stack(aux_logits_list, dim=0)
-
-            # Softmax로 confidence 정규화 (dim=0: 모달리티 차원에서 합=1)
-            normalized_weights = torch.softmax(conf_stacked, dim=0)  # [num_modalities, batch]
-
-            # ─── [α-Diag] modality weight 분포 진단 로깅 ────────────────────
-            # 전체 실행 중 1회만 출력 (배치마다 반복 방지)
-            if not getattr(self, '_alpha_logged', False):
-                w_np = normalized_weights.detach().cpu().numpy()  # [M, B]
-                modality_names = ['RGB', 'Gyro', 'Acce']
-                logging.info("=" * 60)
-                logging.info("[α-Diag] Modality Weight (α_m) Distribution")
-                logging.info(f"  shape: {w_np.shape}  (modalities x batch)")
-                for i, mod in enumerate(modality_names[:w_np.shape[0]]):
-                    w_i = w_np[i]
-                    logging.info(
-                        f"  α_{mod}: mean={w_i.mean():.4f}, std={w_i.std():.4f}, "
-                        f"min={w_i.min():.4f}, max={w_i.max():.4f}"
-                    )
-                per_sample_std = w_np.std(axis=0)  # [B]: 샘플별 3 modality weight의 std
-                logging.info(
-                    f"  per-sample std(α_RGB,α_Gyro,α_Acce): "
-                    f"mean={per_sample_std.mean():.4f}, max={per_sample_std.max():.4f}"
-                )
-                logging.info(
-                    f"  → uniform 기준: std≈0.0000  |  "
-                    f"완전 one-hot 기준: std≈{((2/3)**0.5)/3:.4f}"
-                )
-                logging.info("=" * 60)
-                self._alpha_logged = True
-
-            # 가중합 계산
-            for i in range(len(aux_logits_list)):
-                weighted_logits = aux_logits_stacked[i] * normalized_weights[i].unsqueeze(-1)
-                fused_logits = fused_logits + weighted_logits
-
-        return fused_logits
-    
     # ----------------------------------------------------------------------------------
     # LTS 전용 로직 (Baseline only)
     # ----------------------------------------------------------------------------------
@@ -507,174 +359,6 @@ class UnifiedOODDetector(BaseOODDetector):
         
         # LTS Fusion Detector 사용
         return self._base_detector.compute_scores_with_fusion_features(main_logits, fusion_features)
-    
-    def _compute_lts_score_fusion(self, outputs, alpha=1.0):
-        """
-        [방법 2] LTS Score Fusion 로직.
-        각 Feature에서 LTS scale을 계산하고, 이를 confidence로 가중합합니다.
-        
-        Args:
-            outputs (dict): 모델 출력. 'individual_features', 'fusion_features', 'confidences' 필요.
-            alpha (float): Fused feature score에 대한 가중치.
-        
-        Returns:
-            torch.Tensor: 최종 가중합된 LTS scale [batch_size]
-        """
-        individual_features = outputs.get('individual_features')
-        fusion_features = outputs.get('fusion_features')
-        confidences = outputs.get('confidences', {})
-        
-        if fusion_features is None:
-            raise ValueError("LTS Score Fusion requires 'fusion_features'.")
-        if individual_features is None:
-            raise ValueError("LTS Score Fusion requires 'individual_features'.")
-        if not confidences:
-            raise ValueError("LTS Score Fusion requires 'confidences'.")
-
-        logging.info("  🔥 LTS Score Fusion:")
-        
-        # 1. Fused feature로부터 LTS scale 계산
-        fused_scale = self._base_detector._calculate_lts_scale(fusion_features)
-        final_scale = fused_scale * alpha
-        
-        logging.info(f"     - Fused scale (α={alpha}): mean={fused_scale.mean():.4f}")
-
-        # 2. 각 모달리티별 LTS scale 계산 및 가중합
-        modalities = ['RGB', 'Gyro', 'Acce']
-        for i, modality in enumerate(modalities):
-            if modality in confidences:
-                # individual_features는 dict 또는 list일 수 있음
-                if isinstance(individual_features, dict):
-                    features = individual_features.get(modality)
-                elif isinstance(individual_features, list):
-                    features = individual_features[i] if i < len(individual_features) else None
-                else:
-                    features = None
-                
-                if features is not None:
-                    conf = confidences[modality]  # [batch_size]
-                    
-                    individual_scale = self._base_detector._calculate_lts_scale(features)  # [batch_size]
-                    
-                    final_scale = final_scale + (individual_scale * conf)
-                    
-                    logging.info(f"     - {modality} scale: mean={individual_scale.mean():.4f}, conf={conf.mean():.4f}")
-        
-        logging.info(f"     - Final scale: mean={final_scale.mean():.4f}")
-        
-        return final_scale
-
-    def _compute_lts_feature_fusion(self, outputs, alpha=1.0):
-        """
-        [방법 1] LTS Feature Fusion 로직.
-        각 Feature를 confidence로 가중합하여 하이브리드 Feature를 만들고, 
-        이로부터 최종 LTS scale을 계산합니다.
-        
-        Args:
-            outputs (dict): 모델 출력. 'individual_features', 'fusion_features', 'confidences' 필요.
-            alpha (float): Fused feature에 대한 가중치.
-        
-        Returns:
-            torch.Tensor: 최종 하이브리드 Feature로부터 계산된 LTS scale [batch_size]
-        """
-        individual_features = outputs.get('individual_features')
-        fusion_features = outputs.get('fusion_features')  # Concatenated feature
-        confidences = outputs.get('confidences', {})
-        
-        if fusion_features is None:
-            raise ValueError("LTS Feature Fusion requires 'fusion_features'.")
-        if individual_features is None:
-            raise ValueError("LTS Feature Fusion requires 'individual_features'.")
-        if not confidences:
-            raise ValueError("LTS Feature Fusion requires 'confidences'.")
-        
-        logging.info("  🔥 LTS Feature Fusion:")
-        
-        # 1. Projection layer 초기화 (첫 실행 시)
-        if not self._projection_initialized:
-            # individual feature의 dimension 추출
-            if isinstance(individual_features, dict):
-                sample_feature = list(individual_features.values())[0]
-            elif isinstance(individual_features, list):
-                sample_feature = individual_features[0]
-            else:
-                raise ValueError("individual_features must be dict or list")
-            
-            individual_dim = sample_feature.shape[-1]
-            
-            # Projection layer 생성: fusion_features dim -> individual_features dim
-            self.projection_layer = nn.Linear(fusion_features.shape[-1], individual_dim).to(self.device)
-            self._projection_initialized = True
-            
-            logging.info(f"     - Initialized projection: {fusion_features.shape[-1]} -> {individual_dim}")
-        
-        # 2. 차원 통일을 위해 Fused feature를 프로젝션
-        projected_fused_feature = self.projection_layer(fusion_features)
-        
-        # 3. 하이브리드 Feature 생성 (가중합)
-        hybrid_feature = projected_fused_feature * alpha
-        
-        logging.info(f"     - Projected fused feature (α={alpha}): {projected_fused_feature.shape}")
-
-        modalities = ['RGB', 'Gyro', 'Acce']
-        for i, modality in enumerate(modalities):
-            if modality in confidences:
-                # individual_features는 dict 또는 list일 수 있음
-                if isinstance(individual_features, dict):
-                    features = individual_features.get(modality)
-                elif isinstance(individual_features, list):
-                    features = individual_features[i] if i < len(individual_features) else None
-                else:
-                    features = None
-                
-                if features is not None:
-                    conf = confidences[modality].unsqueeze(-1)  # 차원 확장: [batch] -> [batch, 1]
-                    
-                    hybrid_feature = hybrid_feature + (features * conf)
-                    
-                    logging.info(f"     - Added {modality} feature: {features.shape}, conf={conf.squeeze(-1).mean():.4f}")
-                
-        # 4. 최종 하이브리드 Feature로부터 LTS scale 계산
-        final_scale = self._base_detector._calculate_lts_scale(hybrid_feature)
-        
-        logging.info(f"     - Hybrid feature: {hybrid_feature.shape}")
-        logging.info(f"     - Final scale: mean={final_scale.mean():.4f}")
-        
-        return final_scale
-        
-    def _get_fused_logits_for_hybrid(self, outputs):
-        """
-        모든 하이브리드 모드에서 사용할 Fused Logits를 계산하는 헬퍼 함수
-        
-        Args:
-            outputs: 모델의 forward 출력 딕셔너리
-        
-        Returns:
-            fused_logits: tensor [batch, num_classes]
-        """
-        main_logits = outputs.get('logits')
-        auxiliary_logits = outputs.get('auxiliary_logits', {})
-        confidences = outputs.get('confidences', {})
-        modalities = ['RGB', 'Gyro', 'Acce']
-
-        if not auxiliary_logits:
-            raise ValueError(f"Hybrid mode requires 'auxiliary_logits'.")
-
-        if self.mode in ['hybrid_uniform_sum', 'hybrid_uniform_average', 'hybrid_lts_scorefusion', 'hybrid_lts_featurefusion']:
-            # LTS 하이브리드 모드들도 Logit은 uniform_sum 방식으로 퓨전
-            if self.mode == 'hybrid_uniform_average':
-                return self._fuse_logits_uniform_average(main_logits, auxiliary_logits, modalities)
-            return self._fuse_logits_uniform_sum(main_logits, auxiliary_logits, modalities)
-        elif self.mode == 'hybrid_conf_raw':
-            if not confidences: 
-                raise ValueError(f"Mode '{self.mode}' requires 'confidences'.")
-            return self._fuse_logits_conf_raw(main_logits, auxiliary_logits, confidences, modalities)
-        elif self.mode == 'hybrid_conf_normalized':
-            if not confidences: 
-                raise ValueError(f"Mode '{self.mode}' requires 'confidences'.")
-            return self._fuse_logits_conf_normalized(main_logits, auxiliary_logits, confidences, modalities)
-        else:
-            raise ValueError(f"Unknown mode for logit fusion: {self.mode}")
     
     def _compute_scores_from_logits(self, logits):
         """
@@ -796,10 +480,6 @@ class UnifiedOODDetector(BaseOODDetector):
             mode_part = 'Hybrid_UniformSum'
         elif self.mode == 'hybrid_uniform_average':
             mode_part = 'Hybrid_UniformAverage'
-        elif self.mode == 'hybrid_conf_raw':
-            mode_part = 'Hybrid_ConfRaw'
-        elif self.mode == 'hybrid_conf_normalized':
-            mode_part = 'Hybrid_ConfNormalized'
         else:
             mode_part = self.mode.capitalize()
         

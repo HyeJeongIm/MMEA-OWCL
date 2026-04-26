@@ -49,7 +49,7 @@ class MANDFusion(nn.Module):
 
     Post-pretrain phase (epoch ≥ pretrain_epochs):
         - Modality heads are frozen; z_m and r_m computed under no_grad.
-        - moas_score() can be called to produce the full MoAS novelty score.
+        - z_m and r_m are available for OOD detectors via auxiliary_logits/confidences.
     """
 
     def __init__(
@@ -58,13 +58,12 @@ class MANDFusion(nn.Module):
         modality: list,
         dropout: float,
         num_classes: int = 32,
-        confidence_method: str = "energy",
         aux_loss_weight: float = 0.5,
         consensus_type: str = "avg",
         before_softmax: bool = True,
         num_segments: int = 8,
         pretrain_epochs: int = 5,
-        energy_norm_method: str = "zscore",
+        **kwargs,
     ):
         """
         Args:
@@ -72,20 +71,11 @@ class MANDFusion(nn.Module):
             modality:           ordered list, e.g. ['RGB', 'Gyro', 'Acce']
             dropout:            dropout probability for the fusion MLP
             num_classes:        initial output dimension of modality heads H_m(·)
-            confidence_method:  confidence method for _compute_confidence
-                                ('energy' + 'zscore' → MoAS r_m; others for ablation)
             aux_loss_weight:    λ — weight on per-modality head supervision loss
             consensus_type:     TBN consensus ('avg' or 'identity')
             before_softmax:     whether logits are pre-softmax
             num_segments:       number of TBN segments
             pretrain_epochs:    epochs per task to train modality heads
-            energy_norm_method:       energy normalisation method:
-                                        - 'zscore'       : r_m = -(E_m - μ_m) / σ_m  (MoAS Eq.2)
-                                        - 'e_uniform'    : r_m = sigmoid(-(E_m - E_uniform))
-                                        - 'raw'          : r_m = sigmoid(-E_m)
-                                        - 'high_sigmoid' : r_m = sigmoid(+delta)
-                                                           delta = E_m - E_mean
-                                                           high-energy(불확실한) modality에 높은 가중치.
         """
         super().__init__()
 
@@ -93,9 +83,7 @@ class MANDFusion(nn.Module):
         self.feature_dim = feature_dim
         self.dropout = dropout
         self.num_classes = num_classes
-        self.confidence_method = confidence_method
         self.morst_lambda = aux_loss_weight  # λ — paper name internally
-        self.energy_norm_method = energy_norm_method
 
         self.consensus_type = consensus_type
         self.before_softmax = before_softmax
@@ -133,9 +121,18 @@ class MANDFusion(nn.Module):
         self.first_forward_per_task: dict = {}
         self.epoch_logged: set = set()
 
-        # Per-modality energy statistics {m: (μ, σ)} — injected by mmeabase
-        # via _compute_energy_stats_from_memory → set_energy_stats()
-        self._energy_stats: dict = {}
+        # Prototype Distance Adaptive Weighting — injected by mmeabase
+        # via _compute_class_prototypes_from_memory → set_prototypes()
+        # Used at inference when OOD method == 'PrototypeAdaptive'
+        self._prototypes: dict = {}   # {m: {class_idx: np.ndarray [C]}}
+        self._dist_stats: dict = {}   # {m: (mu_dist: float, sigma_dist: float)}
+
+        # Raw buffer logit arrays — injected by mmeabase
+        # via _compute_class_prototypes_from_memory → set_raw_logit_arrays()
+        # Used by distance-metric OOD detectors (kNN, DiagMahal, Softmax, PooledMahal, Cosine)
+        # to self-compute their own metric-specific dist_stats at init time.
+        self._raw_logit_arrays: dict = {}  # {m: {class_idx: list[np.ndarray [C]]}}
+
 
         self.consensus = ConsensusModule(consensus_type)
         if not self.before_softmax:
@@ -150,8 +147,7 @@ class MANDFusion(nn.Module):
         """
         Alias for modality_heads.
         Required by mmeabase.py:
-            hasattr(fusion, 'auxiliary_heads')   → triggers energy stats computation
-            hasattr(fusion_module, 'auxiliary_heads')  → confidence collection
+            hasattr(fusion, 'auxiliary_heads')   → triggers prototype computation
         """
         return self.modality_heads
 
@@ -177,22 +173,39 @@ class MANDFusion(nn.Module):
             f"[MANDFusion] Modality heads updated: {old_num_classes} → {nb_classes} classes"
         )
 
-    # ------------------------------------------------------------------
-    # Energy statistics injection  (called by mmeabase._compute_energy_stats_from_memory)
-    # ------------------------------------------------------------------
-
-    def set_energy_stats(self, energy_stats: dict):
+    def set_prototypes(self, prototypes: dict, dist_stats: dict):
         """
-        Inject per-modality energy statistics (μ_m, σ_m) from the replay buffer.
-        Required for MoAS z-score reliability computation (Eq. 2).
+        Inject per-modality class prototypes and distance statistics from the replay buffer.
+        Used at inference time by PrototypeAdaptiveDetector.
 
         Args:
-            energy_stats: {modality_name: (mean: float, std: float)}
+            prototypes:  {modality: {class_idx (int): np.ndarray [C]}}
+            dist_stats:  {modality: (mu_dist: float, sigma_dist: float)}
         """
-        self._energy_stats = energy_stats
-        logging.info("[MANDFusion] MoAS energy statistics injected:")
-        for mod, (mean, std) in energy_stats.items():
-            logging.info(f"  {mod}: μ={mean:.4f}, σ={std:.4f}")
+        self._prototypes = prototypes
+        self._dist_stats = dist_stats
+        logging.info("[MANDFusion] Prototype distance stats injected:")
+        for m, (mu, sigma) in dist_stats.items():
+            n_cls = len(prototypes.get(m, {}))
+            logging.info(f"  {m}: μ_dist={mu:.4f}, σ_dist={sigma:.4f}, classes={n_cls}")
+
+    def set_raw_logit_arrays(self, raw_logit_arrays: dict):
+        """
+        Inject raw per-class logit arrays from the replay buffer.
+        Used by kNN, DiagMahal, Softmax, PooledMahal, and Cosine detectors
+        to self-compute their metric-specific dist_stats at init time.
+
+        Args:
+            raw_logit_arrays: {modality: {class_idx (int): list[np.ndarray [C]]}}
+        """
+        self._raw_logit_arrays = raw_logit_arrays
+        for m, cls_dict in raw_logit_arrays.items():
+            total = sum(len(v) for v in cls_dict.values())
+            logging.info(
+                "[MANDFusion] raw_logit_arrays[%s]: %d classes, %d vectors",
+                m, len(cls_dict), total,
+            )
+
 
     # ------------------------------------------------------------------
     # Epoch / task management
@@ -215,8 +228,6 @@ class MANDFusion(nn.Module):
         self.current_epoch = 0
         self.auxiliary_heads_frozen = False
         self.epoch_logged.clear()
-        for mod in self.modality:
-            setattr(self, f"_energy_logged_{mod}", False)
         for m in self.modality:
             for p in self.modality_heads[m].parameters():
                 p.requires_grad = True
@@ -236,149 +247,6 @@ class MANDFusion(nn.Module):
 
     def _is_pretrain_phase(self) -> bool:
         return self.current_epoch < self.pretrain_epochs
-
-    # ------------------------------------------------------------------
-    # MoRST: confidence / reliability computation  (r_m, Eq. 2)
-    # ------------------------------------------------------------------
-
-    def _compute_confidence(self, logits: torch.Tensor, modality_name: str = None) -> torch.Tensor:
-        """
-        Compute per-sample confidence from modality head logits.
-
-        When confidence_method == 'energy' and energy_norm_method == 'zscore',
-        returns r_m = -(E_m - μ_m) / σ_m  (Eq. 2) — exactly what MoAS uses.
-
-        Note: 'high_sigmoid'은 모든 modality의 E_m이 모인 뒤 E_mean을 계산해야 하므로
-              이 함수에서 처리하지 않고 forward() / moas_score()에서 후처리합니다.
-              해당 method일 경우 이 함수는 placeholder를 반환하며,
-              이후 후처리 블록에서 reliability_dict가 override됩니다.
-        """
-        if self.confidence_method == "energy":
-            energy = -torch.logsumexp(logits, dim=1)  # E_m (Eq. 1)
-
-            if self.energy_norm_method == "high_sigmoid":
-                # 후처리에서 override되므로 placeholder 반환
-                return torch.zeros(logits.size(0), device=logits.device)
-
-            elif self.energy_norm_method == "zscore":
-                stats = self._energy_stats.get(modality_name) if modality_name else None
-                if stats is not None:
-                    e_mean, e_std = stats
-                    return -(energy - e_mean) / (e_std + 1e-8)  # r_m (Eq. 2)
-                return torch.sigmoid(-energy)  # fallback: stats not yet injected
-
-            elif self.energy_norm_method == "e_uniform":
-                num_cls = logits.shape[1]
-                e_uniform = -torch.log(
-                    torch.tensor(num_cls, dtype=torch.float32, device=logits.device)
-                )
-                return torch.sigmoid(-(energy - e_uniform))
-
-            else:  # "raw"
-                return torch.sigmoid(-energy)
-
-        elif self.confidence_method == "entropy":
-            probs = F.softmax(logits, dim=1)
-            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1)
-            max_entropy = torch.log(
-                torch.tensor(self.num_classes, device=entropy.device, dtype=torch.float32)
-            )
-            return 1.0 - (entropy / max_entropy)
-
-        elif self.confidence_method == "max_prob":
-            probs = F.softmax(logits, dim=1)
-            confidence, _ = torch.max(probs, dim=1)
-            return confidence
-
-        else:
-            return torch.ones(logits.size(0), device=logits.device) / len(self.modality)
-
-    # ------------------------------------------------------------------
-    # MoAS: full inference-time novelty scoring  (Eqs. 2-5)
-    # ------------------------------------------------------------------
-
-    def moas_score(self, z_main: torch.Tensor, modality_logits: dict) -> dict:
-        """
-        Compute MoAS combined logits and novelty score.
-
-        z^MoAS_c = z_main,c + Σ_m α_m · z_m,c    (Eq. 4)
-        s(x)     = max_c z^MoAS_c                 (Eq. 5)
-
-        Args:
-            z_main:          [B, C]  main classifier logits
-            modality_logits: {m: Tensor [B, C]}  z_m from H_m
-
-        Returns:
-            dict:
-                'combined_logits':    [B, C]   z^MoAS
-                'novelty_score':      [B]      s(x)
-                'weights':            {m: [B]} α_m per modality
-                'reliability_scores': {m: [B]} r_m per modality
-                'energy_scores':      {m: [B]} E_m per modality
-        """
-        energy_dict = {}
-        reliability_dict = {}
-
-        for m in self.modality:
-            if m not in modality_logits or modality_logits[m] is None:
-                continue
-            z_m = modality_logits[m]
-            energy = -torch.logsumexp(z_m, dim=1)              # E_m (Eq. 1)
-            energy_dict[m] = energy
-            reliability_dict[m] = self._compute_confidence(z_m, m)  # r_m (Eq. 2)
-
-        # ── high_sigmoid: E_mean 기반 reliability 재계산 ─────────────────────
-        # delta = E_m - E_mean  (T=1)
-        # r_m = sigmoid(+delta) : high-energy modality에 높은 가중치
-        if self.confidence_method == "energy" and self.energy_norm_method == "high_sigmoid" and energy_dict:
-            mods = list(energy_dict.keys())
-            E_mean = torch.stack([energy_dict[m] for m in mods], dim=0).mean(dim=0)
-            for m in mods:
-                delta = energy_dict[m] - E_mean
-                reliability_dict[m] = torch.sigmoid(delta)
-
-        # No valid modalities: return main logits unchanged
-        if not reliability_dict:
-            return {
-                "combined_logits": z_main,
-                "novelty_score": z_main.max(dim=1).values,
-                "weights": {},
-                "reliability_scores": {},
-                "energy_scores": {},
-            }
-
-        # ── Approach A (기존): α_m = softmax({r_m}),  z^MoAS = z_main + Σ α_m·z_m ──
-        # α_m = softmax({r_m})  (Eq. 3)
-        modalities = list(reliability_dict.keys())
-        r_stack = torch.stack([reliability_dict[m] for m in modalities], dim=1)  # [B, M]
-        alpha_stack = F.softmax(r_stack, dim=1)                                  # [B, M]
-        weights = {m: alpha_stack[:, i] for i, m in enumerate(modalities)}
-
-        # z^MoAS = z_main + Σ_m α_m · z_m  (Eq. 4, Approach A)
-        combined = z_main.clone()
-        for m, alpha in weights.items():
-            z_m = modality_logits[m]
-            # Align class dimension (z_m may have fewer classes if from earlier task)
-            if z_m.shape[1] < z_main.shape[1]:
-                pad = torch.zeros(
-                    z_m.shape[0], z_main.shape[1] - z_m.shape[1],
-                    device=z_m.device, dtype=z_m.dtype,
-                )
-                z_m = torch.cat([z_m, pad], dim=1)
-            elif z_m.shape[1] > z_main.shape[1]:
-                z_m = z_m[:, :z_main.shape[1]]
-            combined = combined + alpha.unsqueeze(1) * z_m
-
-        # s(x) = max_c z^MoAS  (Eq. 5)
-        novelty_score = combined.max(dim=1).values
-
-        return {
-            "combined_logits": combined,
-            "novelty_score": novelty_score,
-            "weights": weights,
-            "reliability_scores": reliability_dict,
-            "energy_scores": energy_dict,
-        }
 
     # ------------------------------------------------------------------
     # TBN helpers
@@ -419,14 +287,12 @@ class MANDFusion(nn.Module):
 
         Post-pretrain phase:
             - Modality heads computed under no_grad (frozen inference).
-            - confidences = r_m values for MoAS at OOD evaluation time.
 
         Returns dict (keys preserved for mmeabase / OOD detector compatibility):
             'features'              [B, 512]   fused representation
             'auxiliary_logits'      {m: [B,C]} z_m — for MoAS + mmeabase
             'auxiliary_loss'        Tensor|None — mmeabase._compute_total_loss
             'aux_loss_weight'       float  λ (morst_lambda) — mmeabase key
-            'confidences'           {m: [B]}   r_m reliability — OOD detector
             'is_pretrain_phase'     bool
             'auxiliary_heads_frozen' bool
             'fusion_type'           str
@@ -437,34 +303,17 @@ class MANDFusion(nn.Module):
 
         is_pretrain = self._is_pretrain_phase()
         auxiliary_logits: dict = {}
-        confidences: dict = {}
 
-        # ── Modality heads z_m + reliability r_m ─────────────────────────
+        # ── Modality heads z_m ────────────────────────────────────────────
         if is_pretrain:
             for m, feature in modality_features.items():
                 z_m_seg = self.modality_heads[m](feature)
-                z_m = self._apply_consensus_to_logits(z_m_seg)
-                auxiliary_logits[m] = z_m
-                confidences[m] = self._compute_confidence(z_m, modality_name=m)
+                auxiliary_logits[m] = self._apply_consensus_to_logits(z_m_seg)
         else:
             with torch.no_grad():
                 for m, feature in modality_features.items():
                     z_m_seg = self.modality_heads[m](feature)
-                    z_m = self._apply_consensus_to_logits(z_m_seg)
-                    auxiliary_logits[m] = z_m
-                    confidences[m] = self._compute_confidence(z_m, modality_name=m)
-
-        # ── high_sigmoid: E_mean 기반 confidence 후처리 ──────────────────────
-        # delta = E_m - E_mean  (T=1)
-        # r_m = sigmoid(+delta) : high-energy modality에 높은 가중치
-        if self.confidence_method == "energy" and self.energy_norm_method == "high_sigmoid" and auxiliary_logits:
-            mods = list(auxiliary_logits.keys())
-            E_mean = torch.stack(
-                [-torch.logsumexp(auxiliary_logits[m], dim=1) for m in mods], dim=0
-            ).mean(dim=0)
-            for m in mods:
-                E_m = -torch.logsumexp(auxiliary_logits[m], dim=1)
-                confidences[m] = torch.sigmoid(E_m - E_mean)
+                    auxiliary_logits[m] = self._apply_consensus_to_logits(z_m_seg)
 
         # ── Uniform 1:1:1 feature fusion → fc1 → ReLU → dropout ──────────
         weighted_features = [modality_features[m] for m in self.modality if m in modality_features]
@@ -490,10 +339,9 @@ class MANDFusion(nn.Module):
 
         return {
             "features": x,
-            "auxiliary_logits": auxiliary_logits,    # z_m — kept for mmeabase / MoAS
-            "auxiliary_loss": auxiliary_loss,         # kept for mmeabase
-            "aux_loss_weight": self.morst_lambda,     # λ — kept as 'aux_loss_weight' for mmeabase
-            "confidences": confidences,               # r_m — used by OOD detector for MoAS
+            "auxiliary_logits": auxiliary_logits,
+            "auxiliary_loss": auxiliary_loss,
+            "aux_loss_weight": self.morst_lambda,
             "is_pretrain_phase": is_pretrain,
             "auxiliary_heads_frozen": self.auxiliary_heads_frozen,
             "fusion_type": "mand_fusion",
