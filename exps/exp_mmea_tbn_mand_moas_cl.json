@@ -1,7 +1,7 @@
 {
   "dataset": "mmea",
   "modality": ["RGB", "Gyro", "Acce"],
-  "model_name": "tbn_mand_wo_morst",
+  "model_name": "tbn_mand_moas_cl",
   "exemplar_selection": "herding",
 
   "backbone": "tbn",
@@ -27,24 +27,26 @@
   "clip_gradient": 20,
 
   "memory_size": 320,
-  "increment": 2,
+  "increment": 4,
   "shuffle": false,
 
   "pretrain_epochs": 50,
   "confidence_method": "energy",
   "energy_norm_method": "zscore",
-  "conf_sigmoid_temperature": 1.0,
+  "alpha_temp": 3.0,
   "morst_lambda": 0.4,
   "morst_beta": 0.005,
-  "morst_enabled": false,
   "partialbn": true,
   "freeze": false,
 
-  "experiment_suffix": "wo_morst",
+  "experiment_suffix": "train",
 
-  "mode": "train",
-  "enable_ood": false,
-  "weights_path": null,
+  "mode": "eval",
+  "enable_ood": true,
+  "ood_methods": ["MaxLogit_Baseline", "MaxLogit_Hybrid_UniformAverage", "MoAS"],
+  "ood_beta": 3.0,
+  "ood_gamma": 4.0,
+  "weights_path": "",
 
   "seed": 1993,
   "prefix": "mmea-owcl",

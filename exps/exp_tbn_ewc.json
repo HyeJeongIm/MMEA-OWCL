@@ -13,7 +13,7 @@
   "before_softmax": true,
   "train_list": "mydataset_total_train.txt",
   "test_list": "mydataset_test.txt",
-  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/mpu/",
   "num_segments": 8,
   "batch_size": 8,
   "workers": 4,

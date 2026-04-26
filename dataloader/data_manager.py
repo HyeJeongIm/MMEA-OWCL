@@ -331,7 +331,7 @@ class TBNDummyDataset(Dataset):
             self._process_acce_data = filter_datas[0:3, :].T
             self._process_gyro_data = angles
         except Exception as e:
-            print('error loading mpu file:', file_path, 'Error:', str(e))    
+            print('error loading mpu file:', file_path, 'Error:', str(e))
             
     def _load_data(self, modality, record, idx):
         if modality == 'RGB' or modality == 'RGBDiff':

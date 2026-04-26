@@ -10,9 +10,9 @@
   "consensus_type": "avg",
   "before_softmax": true,
 
-  "train_list": "mmea_train.txt",
-  "test_list": "mmea_val.txt",
-  "mpu_path": "./datasets/UESTC-MMEA-CL/UESTC-MMEA-CL/mpu/",
+  "train_list": "mmea_train_total.txt",
+  "test_list": "mmea_test.txt",
+  "mpu_path": "./datasets/UESTC-MMEA-CL/mpu/",
 
   "num_segments": 8,
   "batch_size": 8,
@@ -27,16 +27,18 @@
   "clip_gradient": 20,
 
   "memory_size": 320,
-  "increment": 8,
+  "increment": 4,
   "shuffle": false,
 
   "pretrain_epochs": 50,
-  "confidence_method": "energy",
+  "confidence_method": "replay_accuracy",
   "energy_norm_method": "zscore",
-  "morst_lambda": 0.3,
-  "morst_beta": 0.08,
+  "morst_lambda": 0.4,
+  "morst_beta": 0.005,
   "partialbn": true,
   "freeze": false,
+
+  "experiment_suffix": "train",
 
   "mode": "eval",
   "enable_ood": true,
