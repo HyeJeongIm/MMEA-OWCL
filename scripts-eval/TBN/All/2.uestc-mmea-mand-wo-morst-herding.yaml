@@ -34,10 +34,6 @@ parameters:
     values: ['mand_fusion']
   pretrain_epochs:
     values: [50]
-  confidence_method:
-    values: ['energy']
-  energy_norm_method:
-    values: ['zscore']
   mode:
     values: ['eval']
   increment:
@@ -48,7 +44,7 @@ parameters:
     values: [null]
   # train 시 experiment_suffix: "train_wo_morst"로 저장된 가중치를 로드하기 위해 동일 suffix 필요
   experiment_suffix:
-    values: ["train_wo_morst"]
+    values: ["wo_morst"]
   morst_enabled:
     values: [false]
 
@@ -62,12 +58,13 @@ parameters:
       # ========================================
       # Logit-based Hybrid - UniformSum
       # ========================================
-      "MaxLogit_Hybrid_UniformSum",
+      # "MaxLogit_Hybrid_UniformSum",
 
       # ========================================
       # Logit-based Hybrid - UniformAverage
       # ========================================
       "MaxLogit_Hybrid_UniformAverage",
+      "MoAS", 
     ]]
   seed:
     values: [1993, 1994, 1995, 1996, 1997]
@@ -79,3 +76,68 @@ parameters:
     values: [0.4]
   morst_beta:
     values: [0.005]
+
+  # ---------------------------
+  # 🔹 Alpha Temperature Sweep
+  # Prototype-based 5개 method(PrototypeAdaptive, EnergyGate, PenaltyScore,
+  # Disagreement, RewardPenaltyScore)의 softmax sharpening 강도.
+  # MaxLogit / ContrastiveConsistency / MinModality / MOAS는 alpha_temp 무관.
+  #
+  # τ = 2.0, 3.0, 4.0, 5.0 
+  # τ = 1.0 : 기존 그대로 (standard softmax, weight collapse 가능성 높음)
+  # τ = 0.5 : 약한 sharpening
+  # τ = 0.3 : 중간 sharpening  ← pilot 추천 시작점
+  # τ = 0.1 : 강한 sharpening (u_stack 차이가 작아도 거의 argmax처럼 동작)
+  #
+  # 현재 runs: increment(3) × seed(5) × alpha_temp(4) = 60 runs
+  # 빠른 pilot 원하면 seed를 [1993]으로 줄이고 increment를 [8]로 고정 → 4 runs
+  # ---------------------------
+  alpha_temp:
+    values: [3.0]
+
+  # ---------------------------
+  # 🔹 OOD Penalty Hyperparameters (Stage 1 Sweep)
+  # Cross-Modal methods의 penalty 강도 탐색.
+  #
+  # ood_beta  : prototype distance penalty 강도
+  #   낮을수록 거리 penalty 약함 (logit fusion 위주)
+  #   높을수록 OOD 억제 강함 (FP 증가 위험)
+  #   runs 기준 P_proto_mean × beta ∈ [0.3, 0.8] 이 적정
+  #
+  # ood_gamma : cross-modal KL disagreement penalty 강도
+  #   0.0 = KL penalty 없음 (CrossModal variant가 base와 동일하게 동작)
+  #   0.3~0.5 = P_proto와 D_kl이 균형 (D_kl ≈ 0.5 nats 기준)
+  #   1.0+ = D_kl 지배 (near-OOD 강화, ID score 약간 낮아질 수 있음)
+  #
+  # 총 runs: increment(3) × seed(5) × beta(4) × gamma(4) = 240 runs
+  # 빠른 pilot: seed=[1993], increment=[8] → 16 runs
+  # ---------------------------
+  ood_beta:
+    values: [3.0]
+
+  ood_gamma:
+    values: [4.0]
+
+
+  # ---------------------------
+  # 🔹 ASH percentile Sweep
+  # ASHMultimodal에서 각 branch logit의 상위 p%를 zeroing하는 비율.
+  # p 낮을수록 덜 제거 (원본에 가까움), 높을수록 더 제거 (stronger shaping)
+  # MaxLogit_Hybrid_UniformAverage에는 영향 없음 (비교 baseline으로만 사용됨).
+  # 현재 runs: increment(3) × seed(5) × ash_percentile(4) = 60 runs
+  # ---------------------------
+  # ash_percentile:
+  #   values: [50, 65, 75, 90]
+
+  # # ---------------------------
+  # # 🔹 ProtoMoE-Suppress Hyperparameters
+  # # moe_beta : sigmoid slope. 높을수록 thresh 기준이 sharp해짐
+  # #   β=1 → 부드러운 게이팅, β=3 → 거의 hard gate
+  # # moe_thresh: suppression 기준 z-score
+  # #   -1.28 = buffer 하위 10% (보수적), -1.0 = 권장 시작점, 0.0 = 공격적
+  # # ScoreLevelFusion / BufferCalibratedFusion / 기타에는 영향 없음
+  # # ---------------------------
+  # moe_beta:
+  #   values: [1.0, 2.0, 3.0]
+  # moe_thresh:
+  #   values: [-1.28, -1.0, -0.5]

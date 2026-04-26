@@ -1,5 +1,5 @@
-# TBN-MAND (All) Method with mand_fusion
-name: 'Train TBN-MAND (All) Method (morst_lambda=0.4, morst_beta=0.005) on UESTC-MMEA-CL (Seeds 1997, Inc 2)'
+# TBN-MAND wo_morst (All) Method with mand_fusion — MoRST 비활성화 ablation
+name: 'Train TBN-MAND_wo_morst (All) Method (morst_lambda=0.4, morst_beta=0.005) on UESTC-MMEA-CL (Seeds 1993-1997, Inc 8)'
 project: 'Experimental Results on the MMEA-OWCL (CL Training & Evaluation)'
 entity: 'mmea-owcl'
 
@@ -17,7 +17,7 @@ parameters:
   test_list:
     values: ['mmea_test.txt']
   model_name:
-    values: ['tbn_mand']
+    values: ['tbn_mand_wo_morst']   # model_factory: TBN_MAND with morst_enabled=False
   workers:
     values: [4]
   epochs:
@@ -38,18 +38,20 @@ parameters:
     values: ['energy']
   energy_norm_method:
     values: ["zscore"]
+  morst_enabled:
+    values: [false]                 # MoRST 비활성화 (wo_morst 핵심)
   mode:
     values: ['train']
   increment:
-    values: [2]
+    values: [8]
   enable_ood:
     values: [false]
   weights_path:
     values: [null]
   seed:
-    values: [1997]
+    values: [1993, 1994, 1995, 1996, 1997]
   experiment_suffix:
-    values: ["train"]
+    values: ["wo_morst"]            # 실험 디렉토리 구분용
   # ---------------------------
   # 🔹 Hyperparameters to Sweep: λ (morst_lambda), β (morst_beta)
   # MAND: mand.py — morst_beta(β), morst_lambda(λ). Temperature 없음.

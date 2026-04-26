@@ -30,8 +30,6 @@
   "shuffle": false,
   
   "pretrain_epochs": 10,
-  "confidence_method": "max_prob",
-
   "partialbn": true,
   "freeze": false,
   

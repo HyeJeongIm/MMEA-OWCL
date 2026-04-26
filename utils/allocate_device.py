@@ -96,11 +96,28 @@ def _get_gpu_memory_pynvml_all_processes(device_id: int = 0) -> int:
     return sum([proc.usedGpuMemory for proc in procs])
 
 
+def _get_gpu_memory_nvidia_smi() -> List[int]:
+    """
+    Use nvidia-smi to get current GPU memory usage across all processes.
+    Returns memory used in MiB per device, converted to Bytes. Returns [] on failure.
+    """
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return [int(x.strip()) * 1024 * 1024 for x in result.stdout.strip().split('\n') if x.strip()]
+    except Exception:
+        pass
+    return []
+
+
 def get_alloc_memory_all_devices(return_all=False) -> List[int]:
     """
     Returns the memory allocated on all the available devices.
-    By default, tries to return the memory read from pynvml, if available.
-    Else, it returns the memory `reserved` by torch.
+    Priority: pynvml > nvidia-smi > torch.max_memory_allocated (cross-process aware order).
 
     If `return_all` is set to True, it returns a tuple with the memory reserved, allocated and from pynvml.
 
@@ -110,7 +127,6 @@ def get_alloc_memory_all_devices(return_all=False) -> List[int]:
     gpu_memory_allocated = []
     gpu_memory_nvidiasmi = []
     for i in range(torch.cuda.device_count()):
-        # _ = torch.tensor([1]).to(i)  # allocate memory to get more accurate reading from torch
         gpu_memory_reserved.append(torch.cuda.max_memory_reserved(i))
         gpu_memory_allocated.append(torch.cuda.max_memory_allocated(i))
 
@@ -123,8 +139,14 @@ def get_alloc_memory_all_devices(return_all=False) -> List[int]:
     if return_all:
         return gpu_memory_reserved, gpu_memory_allocated, gpu_memory_nvidiasmi
     else:
+        # 1순위: pynvml (cross-process, 정확)
         if any([g > 0 for g in gpu_memory_nvidiasmi]):
             return gpu_memory_nvidiasmi
+        # 2순위: nvidia-smi subprocess (cross-process, pynvml 없을 때 fallback)
+        smi_memory = _get_gpu_memory_nvidia_smi()
+        if smi_memory and len(smi_memory) == torch.cuda.device_count():
+            return smi_memory
+        # 3순위: torch.max_memory_allocated (현재 프로세스 내만 반영, 부정확)
         return gpu_memory_allocated
 
     

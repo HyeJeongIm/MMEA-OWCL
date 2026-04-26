@@ -31,8 +31,6 @@
   "shuffle": false,
 
   "pretrain_epochs": 50,
-  "confidence_method": "replay_accuracy",
-  "energy_norm_method": "zscore",
   "morst_lambda": 0.4,
   "morst_beta": 0.005,
   "partialbn": true,

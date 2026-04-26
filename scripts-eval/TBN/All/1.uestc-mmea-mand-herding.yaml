@@ -1,4 +1,4 @@
-name: 'Evaluate TBN-MAND (lambda=0.4, beta=0.005) (All) Method on UESTC-MMEA-CL (Seeds 1993-1997)'
+name: '[MoAS_check] alpha_temp∈{3.0}, ood_beta∈{3.0}, ood_gamma∈{4.0} | TBN-MAND (Inc 8,4,2) Seeds 1993-1997'
 project: 'Experimental Results on the MMEA-OWCL (Evaluation CL & OOD)'
 entity: 'mmea-owcl'
 
@@ -33,15 +33,6 @@ parameters:
     values: ['mand_fusion']
   pretrain_epochs:
     values: [50]
-  confidence_method:
-    values: ['energy']
-  energy_norm_method:
-    # abs_energy (Approach B): r_m = -E_m / T  (절대 에너지, main도 weight 경쟁 참여)
-    #   α = softmax([r_main, r_RGB, r_Gyro, r_Acce])
-    #   z^MoAS = α_main·z_main + Σ_m α_m·z_m
-    #   ID:  E_main 매우 낮음 → α_main 압도 → combined 뾰족 → 낮은 OOD score
-    #   OOD: 모든 E 보통/균등 → weights 균등 → combined 퍼짐 → 높은 OOD score
-    values: ['zscore']
   mode:
     values: ['eval']
   increment:
@@ -64,25 +55,30 @@ parameters:
   ood_methods:
     values: [[
       # ========================================
-      # Logit-based OOD Methods (Baseline)
+      # [MoAS Ablation Study]
+      # 각 컴포넌트의 기여를 단계적으로 측정
+      #
+      # variant                | score 수식
+      # -----------------------+----------------------------------------------
+      # MoAS_ConfidenceOnly    | max(z_fused)                    (fusion only)
+      # MoAS_DistancePenalty   | max(z_fused) - α·P(x)          (+ dist)
+      # MoAS_KLPenalty         | max(z_fused) - γ·D_KL(x)       (+ KL)
+      # MoAS                   | max(z_fused) - α·P(x) - γ·D_KL(x)  (full)
+      #
+      # z_fused = z_main + Σ w_m·z_m  (kNN 기반 modality weighting, 모든 variant 공통)
+      # α = ood_beta, γ = ood_gamma, τ = alpha_temp
       # ========================================
+
+      # ── Baselines ────────────────────────────────────────────────────
       "MaxLogit_Baseline",
-
-      # ========================================
-      # Logit-based Hybrid - UniformSum
-      # ========================================
-      "MaxLogit_Hybrid_UniformSum",
-
-      # ========================================
-      # Logit-based Hybrid - UniformAverage
-      # ========================================
       "MaxLogit_Hybrid_UniformAverage",
 
-      # ========================================
-      # Logit-based Hybrid - ConfNormalized
-      # (abs_energy 가중치로 결합된 logit 사용)
-      # ========================================
-      # "MaxLogit_Hybrid_ConfNormalized",
+      # # ── MoAS Ablation ────────────────────────────────────────────────
+      # "MoAS_ConfidenceOnly",    # adaptive fusion only, no penalties
+      # "MoAS_DistancePenalty",   # + prototype distance penalty (α·P)
+      # "MoAS_KLPenalty",         # + cross-modal KL penalty (γ·D_KL)
+      "MoAS",        
+      # "MoAS_old",    # full MoAS (= CrossModalKNNPrototypePenaltyScore)
     ]]
   seed:
     values: [1993, 1994, 1995, 1996, 1997]
@@ -96,3 +92,68 @@ parameters:
     values: [0.4]
   morst_beta:
     values: [0.005]
+
+  # ---------------------------
+  # 🔹 Alpha Temperature Sweep
+  # Prototype-based 5개 method(PrototypeAdaptive, EnergyGate, PenaltyScore,
+  # Disagreement, RewardPenaltyScore)의 softmax sharpening 강도.
+  # MaxLogit / ContrastiveConsistency / MinModality / MOAS는 alpha_temp 무관.
+  #
+  # τ = 2.0, 3.0, 4.0, 5.0 
+  # τ = 1.0 : 기존 그대로 (standard softmax, weight collapse 가능성 높음)
+  # τ = 0.5 : 약한 sharpening
+  # τ = 0.3 : 중간 sharpening  ← pilot 추천 시작점
+  # τ = 0.1 : 강한 sharpening (u_stack 차이가 작아도 거의 argmax처럼 동작)
+  #
+  # 현재 runs: increment(3) × seed(5) × alpha_temp(4) = 60 runs
+  # 빠른 pilot 원하면 seed를 [1993]으로 줄이고 increment를 [8]로 고정 → 4 runs
+  # ---------------------------
+  alpha_temp:
+    values: [3.0]
+
+  # ---------------------------
+  # 🔹 OOD Penalty Hyperparameters (Stage 1 Sweep)
+  # Cross-Modal methods의 penalty 강도 탐색.
+  #
+  # ood_beta  : prototype distance penalty 강도
+  #   낮을수록 거리 penalty 약함 (logit fusion 위주)
+  #   높을수록 OOD 억제 강함 (FP 증가 위험)
+  #   runs 기준 P_proto_mean × beta ∈ [0.3, 0.8] 이 적정
+  #
+  # ood_gamma : cross-modal KL disagreement penalty 강도
+  #   0.0 = KL penalty 없음 (CrossModal variant가 base와 동일하게 동작)
+  #   0.3~0.5 = P_proto와 D_kl이 균형 (D_kl ≈ 0.5 nats 기준)
+  #   1.0+ = D_kl 지배 (near-OOD 강화, ID score 약간 낮아질 수 있음)
+  #
+  # 총 runs: increment(3) × seed(5) × beta(4) × gamma(4) = 240 runs
+  # 빠른 pilot: seed=[1993], increment=[8] → 16 runs
+  # ---------------------------
+  ood_beta:
+    values: [3.0]
+
+  ood_gamma:
+    values: [4.0]
+
+
+  # ---------------------------
+  # 🔹 ASH percentile Sweep
+  # ASHMultimodal에서 각 branch logit의 상위 p%를 zeroing하는 비율.
+  # p 낮을수록 덜 제거 (원본에 가까움), 높을수록 더 제거 (stronger shaping)
+  # MaxLogit_Hybrid_UniformAverage에는 영향 없음 (비교 baseline으로만 사용됨).
+  # 현재 runs: increment(3) × seed(5) × ash_percentile(4) = 60 runs
+  # ---------------------------
+  # ash_percentile:
+  #   values: [50, 65, 75, 90]
+
+  # # ---------------------------
+  # # 🔹 ProtoMoE-Suppress Hyperparameters
+  # # moe_beta : sigmoid slope. 높을수록 thresh 기준이 sharp해짐
+  # #   β=1 → 부드러운 게이팅, β=3 → 거의 hard gate
+  # # moe_thresh: suppression 기준 z-score
+  # #   -1.28 = buffer 하위 10% (보수적), -1.0 = 권장 시작점, 0.0 = 공격적
+  # # ScoreLevelFusion / BufferCalibratedFusion / 기타에는 영향 없음
+  # # ---------------------------
+  # moe_beta:
+  #   values: [1.0, 2.0, 3.0]
+  # moe_thresh:
+  #   values: [-1.28, -1.0, -0.5]
