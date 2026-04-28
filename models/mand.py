@@ -96,7 +96,7 @@ class MAND(Replay):
 
         self._train(self.train_loader, self.test_loader)
         self.build_rehearsal_memory(data_manager, self.samples_per_class)
-        self._compute_class_prototypes_from_memory(data_manager)
+        self._build_knn_dist_ref_from_memory(data_manager)
 
         if len(self._multiple_gpus) > 1:
             self._network = self._network.module
@@ -786,11 +786,11 @@ class MAND(Replay):
         if hasattr(self, "_class_means"):
             save_dict["class_means"] = self._class_means
 
-        # Prototype Distance Adaptive Weighting stats
+        # kNN dist_ref: class-mean vectors + dist_stats
         fusion = getattr(self._network, "fusion", None) or getattr(self._network, "fusion_network", None)
-        if fusion is not None and hasattr(fusion, "_prototypes") and fusion._prototypes:
-            save_dict["prototypes"] = fusion._prototypes
-            save_dict["dist_stats"] = fusion._dist_stats
+        if fusion is not None and hasattr(fusion, "_class_means") and fusion._class_means:
+            save_dict["class_means"] = fusion._class_means
+            save_dict["dist_stats"]  = fusion._dist_stats
             if hasattr(fusion, "_raw_logit_arrays") and fusion._raw_logit_arrays:
                 save_dict["raw_logit_arrays"] = fusion._raw_logit_arrays
 

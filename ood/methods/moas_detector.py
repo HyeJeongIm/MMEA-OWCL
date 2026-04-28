@@ -1,8 +1,8 @@
 """
 MoAS detectors — kNN-based Modality-adaptive OOD Scoring.
 
-gallery_m = concat([buffer_vecs_c for all c])     [N_total, C]
-d_m       = min_i ||z_m - gallery_m[i]||_2        (1-NN L2 distance)
+dist_ref_m = concat([buffer_vecs_c for all c])     [N_total, C]
+d_m       = min_i ||z_m - dist_ref_m[i]||_2        (1-NN L2 distance)
 
 Class hierarchy:
   MoASBase                (moas_base.py)  — MoAS scoring algorithm  [Eq. 2–7]
@@ -30,11 +30,11 @@ from ood.methods.moas_base import MoASBase
 class KNNMoASDetector(MoASBase):
     """MoAS with 1-NN L2 distance metric.
 
-    Implements _compute_dist_for_modality() using a per-modality gallery
+    Implements _compute_dist_for_modality() using a per-modality dist_ref
     built from all buffer samples (leave-one-out statistics).
 
     Args:
-        raw_logit_arrays:  {m: {class_idx: list[np.ndarray [C]]}}  buffer vecs for gallery
+        raw_logit_arrays:  {m: {class_idx: list[np.ndarray [C]]}}  buffer vecs for dist_ref
         modality:          ordered auxiliary modality list
         device:            torch device string
         eta:               known-class deviation penalty weight η  (default 1.0)
@@ -58,8 +58,8 @@ class KNNMoASDetector(MoASBase):
         )
 
     def _setup(self):
-        """Build per-modality gallery from all buffer samples."""
-        self._gallery = {}
+        """Build per-modality dist_ref from all buffer samples."""
+        self._dist_ref = {}
         for m, cls_dict in self.raw_logit_arrays.items():
             all_vecs = [
                 np.stack(vecs, axis=0)
@@ -67,10 +67,10 @@ class KNNMoASDetector(MoASBase):
                 if len(vecs) > 0
             ]
             if all_vecs:
-                self._gallery[m] = np.concatenate(all_vecs, axis=0)  # [N_total, C]
+                self._dist_ref[m] = np.concatenate(all_vecs, axis=0)  # [N_total, C]
                 logging.info(
-                    "[%s] gallery[%s]: %d vectors",
-                    self.__class__.__name__, m, len(self._gallery[m]),
+                    "[%s] dist_ref[%s]: %d vectors",
+                    self.__class__.__name__, m, len(self._dist_ref[m]),
                 )
 
     def _fit_dist_stats(self) -> dict:
@@ -79,15 +79,15 @@ class KNNMoASDetector(MoASBase):
         for m, cls_dict in self.raw_logit_arrays.items():
             if not cls_dict:
                 continue
-            gallery = self._gallery.get(m)
-            if gallery is None or len(gallery) < 2:
+            dist_ref = self._dist_ref.get(m)
+            if dist_ref is None or len(dist_ref) < 2:
                 continue
             all_vecs = np.concatenate(
                 [np.stack(vecs, axis=0) for vecs in cls_dict.values() if vecs], axis=0
             )  # [N_total, C]
             dists = []
             for i, z in enumerate(all_vecs):
-                loo = np.delete(gallery, i, axis=0)  # [N_total-1, C]  exclude self
+                loo = np.delete(dist_ref, i, axis=0)  # [N_total-1, C]  exclude self
                 d = float(np.linalg.norm(z[None, :] - loo, axis=1).min())
                 dists.append(d)
             arr = np.array(dists)
@@ -99,14 +99,14 @@ class KNNMoASDetector(MoASBase):
         return dist_stats
 
     def _compute_dist_for_modality(self, z: np.ndarray, m: str) -> np.ndarray:
-        """z: [N, C] → [N] 1-NN L2 distance to buffer gallery."""
-        gallery = self._gallery.get(m)
-        if gallery is None or len(gallery) == 0:
+        """z: [N, C] → [N] 1-NN L2 distance to buffer dist_ref."""
+        dist_ref = self._dist_ref.get(m)
+        if dist_ref is None or len(dist_ref) == 0:
             raise RuntimeError(
-                f"[{self.__class__.__name__}] gallery for modality '{m}' is empty. "
-                "raw_logit_arrays must be provided to build the gallery."
+                f"[{self.__class__.__name__}] dist_ref for modality '{m}' is empty. "
+                "raw_logit_arrays must be provided to build the dist_ref."
             )
-        diff = z[:, None, :] - gallery[None, :, :]                # [N, N_total, C]
+        diff = z[:, None, :] - dist_ref[None, :, :]                # [N, N_total, C]
         return np.linalg.norm(diff, axis=-1).min(axis=1)          # [N]
 
 

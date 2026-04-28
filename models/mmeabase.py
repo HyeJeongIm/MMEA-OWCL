@@ -745,7 +745,7 @@ class MMEABaseLearner(BaseLearner):
                     from ood import ODINDetector
                     detector = ODINDetector(self._network, self._device, temperature=1000.0, magnitude=0.0014)
                 
-                # 🔬 Prototype-based OOD Methods
+                # 🔬 MoAS (kNN dist_ref–based) OOD Methods
                 # Score 계산은 아래 needs_auxiliary_outputs 분기에서 수행
                 elif method_name in _PROTO_OOD_METHODS:
                     fusion = getattr(self._network, 'fusion', None) or \
@@ -757,14 +757,14 @@ class MMEABaseLearner(BaseLearner):
                     _tau       = self.args.get('tau', 1.0)
                     _ood_eta   = self.args.get('ood_eta', 1.0)
                     _ood_gamma = self.args.get('ood_gamma', 0.5)
-                    _proto_kwargs = dict(
+                    _dist_ref_kwargs = dict(
                         dist_stats=fusion._dist_stats,
                         modality=self._modality,
                         device=self._device,
                         tau=_tau,
                     )
                     _raw_logit_arrays = getattr(fusion, '_raw_logit_arrays', {})
-                    _raw_proto_kwargs = dict(
+                    _raw_dist_ref_kwargs = dict(
                         raw_logit_arrays=_raw_logit_arrays,
                         dist_stats=fusion._dist_stats,
                         modality=self._modality,
@@ -777,28 +777,28 @@ class MMEABaseLearner(BaseLearner):
                         if not _raw_logit_arrays:
                             logging.warning("[MoAS] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASDetector(**_raw_proto_kwargs, eta=_ood_eta, gamma=_ood_gamma)
+                        detector = MoASDetector(**_raw_dist_ref_kwargs, eta=_ood_eta, gamma=_ood_gamma)
 
                     elif method_name == "MoAS_AdaptiveFusion":
                         from ood.methods.moas_detector import MoASAdaptiveFusionOnly
                         if not _raw_logit_arrays:
                             logging.warning("[MoAS_AdaptiveFusion] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASAdaptiveFusionOnly(**_raw_proto_kwargs)
+                        detector = MoASAdaptiveFusionOnly(**_raw_dist_ref_kwargs)
 
                     elif method_name == "MoAS_DeviationPenalty":
                         from ood.methods.moas_detector import MoASDeviationPenalty
                         if not _raw_logit_arrays:
                             logging.warning("[MoAS_DeviationPenalty] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASDeviationPenalty(**_raw_proto_kwargs, eta=_ood_eta)
+                        detector = MoASDeviationPenalty(**_raw_dist_ref_kwargs, eta=_ood_eta)
 
                     elif method_name == "MoAS_KLPenalty":
                         from ood.methods.moas_detector import MoASKLPenalty
                         if not _raw_logit_arrays:
                             logging.warning("[MoAS_KLPenalty] raw_logit_arrays not available — skipping")
                             continue
-                        detector = MoASKLPenalty(**_raw_proto_kwargs, gamma=_ood_gamma)
+                        detector = MoASKLPenalty(**_raw_dist_ref_kwargs, gamma=_ood_gamma)
 
                 else:
                     logging.warning(f"⚠️  Unknown OOD method: {method_name}")
@@ -968,6 +968,20 @@ class MMEABaseLearner(BaseLearner):
                         logging.info(f"  ✅ Scores computed: ID={len(id_scores)}, OOD={len(ood_scores)}")
                         logging.info(f"     - ID scores: mean={id_scores.mean():.6f}, std={id_scores.std():.6f}, min={id_scores.min():.4f}, max={id_scores.max():.4f}")
                         logging.info(f"     - OOD scores: mean={ood_scores.mean():.6f}, std={ood_scores.std():.6f}, min={ood_scores.min():.4f}, max={ood_scores.max():.4f}")
+
+                        # MoAS component analysis: A(x), B(x), C(x) per sample
+                        if method_name in _PROTO_OOD_METHODS and hasattr(detector, 'compute_scores_detailed_from_outputs'):
+                            self._log_moas_components(
+                                method_name=method_name,
+                                detector=detector,
+                                id_outputs=id_auxiliary_outputs,
+                                ood_outputs=ood_auxiliary_outputs,
+                                ood_methods_metrics=ood_methods_metrics,
+                                id_labels=id_labels,
+                                ood_labels=ood_labels,
+                                id_logits=id_logits,
+                                ood_logits=ood_logits,
+                            )
                     except ValueError as e:
                         logging.error(f"  ❌ Failed to compute scores for {method_name}: {e}")
                         raise
@@ -1057,16 +1071,319 @@ class MMEABaseLearner(BaseLearner):
         
         return ood_results, score_distributions, ood_methods_metrics
 
-    def _compute_class_prototypes_from_memory(self, data_manager, include_main: bool = False):
+    # ------------------------------------------------------------------
+    # MoAS component analysis
+    # ------------------------------------------------------------------
+
+    def _log_moas_components(self, method_name, detector,
+                              id_outputs, ood_outputs, ood_methods_metrics,
+                              id_labels=None, ood_labels=None,
+                              id_logits=None, ood_logits=None):
         """
-        Replay-buffer 기반으로 per-modality per-class prototype과 distance statistics를 계산.
+        MoAS score를 A(x), B(x), C(x), d̃_m, α_m 로 완전 분해하여 분석·로깅.
+
+        ■ 각 값의 의미 (N = 해당 split의 test sample 수)
+          A(x)   [N]    — max_c z_final,c(x): 각 샘플의 fused logit 최댓값
+          B(x)   [N]    — η·P(x): 각 샘플의 deviation penalty (클수록 OOD)
+          C(x)   [N]    — γ·D_KL(x): 각 샘플의 KL disagreement penalty
+          d̃_m   [N, M] — 모달리티별 정규화 kNN 거리 (ID<0 경향, OOD>0 경향)
+          α_m    [N, M] — 모달리티별 신뢰도 가중치 (softmax(-d̃_m/τ))
+
+        ■ 취약점 판단 기준
+          (B+C)/A > 1  → penalty가 fusion 기여를 압도  ⚠️
+          A ID-OOD gap ≈ 0  → adaptive fusion 자체가 구분 못함  ⚠️
+          d̃_m ID-OOD gap ≈ 0  → kNN 거리가 discriminative하지 않음  ⚠️
+          α_m max_dev < 0.05  → 가중치가 uniform에 가까워 adaptive 아님  ⚠️
+        """
+        import os
+        import json
+        import numpy as np
+
+        task      = self._cur_task
+        use_wandb = self.args.get('use_wandb', False)
+        prefix    = f"MoAS_components/task{task}/{method_name}"
+
+        id_detail  = detector.compute_scores_detailed_from_outputs(id_outputs)
+        ood_detail = detector.compute_scores_detailed_from_outputs(ood_outputs)
+        avail      = id_detail.get('avail', [])
+
+        SEP = '='*64
+        logging.info(f"\n{SEP}")
+        logging.info(f"[MoAS Component Analysis]  {method_name}  task={task}")
+        logging.info(f"  ID  samples : {len(id_detail['scores'])}  |  "
+                     f"OOD samples : {len(ood_detail['scores'])}")
+        logging.info(SEP)
+
+        # ── 1. A / B / C / score 분포 요약 ────────────────────────────
+        # "평균" = N개 샘플의 해당 스칼라 평균
+        logging.info("  [Score components — mean ± std across all samples]")
+        for split, detail in [('ID', id_detail), ('OOD', ood_detail)]:
+            a, b, c, s = detail['A'], detail['B'], detail['C'], detail['scores']
+            logging.info(
+                f"    {split:3s}  A={a.mean():.3f}±{a.std():.3f}  "
+                f"B={b.mean():.3f}±{b.std():.3f}  "
+                f"C={c.mean():.3f}±{c.std():.3f}  "
+                f"score={s.mean():.3f}±{s.std():.3f}"
+            )
+            if use_wandb:
+                for term, arr in [('A', a), ('B', b), ('C', c), ('score', s)]:
+                    ood_methods_metrics.update({
+                        f"{prefix}/{split}_{term}_mean":   float(arr.mean()),
+                        f"{prefix}/{split}_{term}_std":    float(arr.std()),
+                        f"{prefix}/{split}_{term}_median": float(np.median(arr)),
+                    })
+
+        # ── 2. ID-OOD gap 분석 ────────────────────────────────────────
+        # A gap > 0: fusion term이 ID와 OOD를 구분  (good)
+        # B gap < 0: OOD에서 penalty가 더 큼        (good)
+        logging.info("  [ID - OOD gap  (positive = ID > OOD)]")
+        for term, sign_expect in [('A', '+'), ('B', '-'), ('C', '-')]:
+            id_arr  = id_detail[term]
+            ood_arr = ood_detail[term]
+            gap  = float(id_arr.mean() - ood_arr.mean())
+            good = (gap > 0 and sign_expect == '+') or (gap < 0 and sign_expect == '-')
+            flag = "✓" if good else "⚠️ "
+            logging.info(f"    {term}: {gap:+.4f}  {flag}")
+            if use_wandb:
+                ood_methods_metrics[f"{prefix}/gap_{term}"] = gap
+
+        # ── 3. Penalty dominance 분석 ─────────────────────────────────
+        # (B+C)/A > 1 → penalty가 fusion 기여를 압도 → 취약점
+        logging.info("  [Penalty dominance  (B+C)/A  — <1 is healthy]")
+        for split, detail in [('ID', id_detail), ('OOD', ood_detail)]:
+            a_abs   = abs(float(detail['A'].mean())) + 1e-8
+            b_ratio = float(detail['B'].mean()) / a_abs
+            c_ratio = float(detail['C'].mean()) / a_abs
+            total   = b_ratio + c_ratio
+            flag    = "⚠️  penalty dominates" if total > 1.0 else "✓"
+            logging.info(
+                f"    {split:3s}  B/A={b_ratio:.3f}  C/A={c_ratio:.3f}  "
+                f"(B+C)/A={total:.3f}  {flag}"
+            )
+            if use_wandb:
+                ood_methods_metrics.update({
+                    f"{prefix}/{split}_B_over_A":  b_ratio,
+                    f"{prefix}/{split}_C_over_A":  c_ratio,
+                    f"{prefix}/{split}_BC_over_A": total,
+                })
+
+        # ── 4. d̃_m (정규화 kNN 거리) 분석 ───────────────────────────
+        # d̃_m < 0: 버퍼보다 가까운 ID-like 샘플
+        # d̃_m > 0: 버퍼보다 먼 OOD-like 샘플
+        # ID-OOD gap이 작으면 거리 자체가 discriminative하지 않음 → 취약점
+        if avail:
+            logging.info("  [d̃_m  normalised kNN distance per modality]")
+            id_dt  = id_detail.get('d_tilde')
+            ood_dt = ood_detail.get('d_tilde')
+            if id_dt is not None and ood_dt is not None:
+                for k, m in enumerate(avail):
+                    id_d  = id_dt[:, k]
+                    ood_d = ood_dt[:, k]
+                    gap   = float(ood_d.mean() - id_d.mean())   # OOD - ID (should be positive)
+                    flag  = "✓" if gap > 0.3 else "⚠️  low discriminability"
+                    logging.info(
+                        f"    {m:6s}  ID={id_d.mean():.3f}±{id_d.std():.3f}  "
+                        f"OOD={ood_d.mean():.3f}±{ood_d.std():.3f}  "
+                        f"gap(OOD-ID)={gap:+.3f}  {flag}"
+                    )
+                    if use_wandb:
+                        ood_methods_metrics.update({
+                            f"{prefix}/dtilde_{m}_ID_mean":  float(id_d.mean()),
+                            f"{prefix}/dtilde_{m}_OOD_mean": float(ood_d.mean()),
+                            f"{prefix}/dtilde_{m}_gap":      gap,
+                        })
+
+        # ── 5. α_m (modality reliability weight) 분석 ─────────────────
+        # ID vs OOD에서 α_m 분포가 다르면 → adaptive weighting 작동 ✓
+        # max_deviation ≈ 0 → uniform에 가까워 사실상 equal weighting ⚠️
+        if avail:
+            logging.info("  [α_m  modality reliability weights]")
+            uniform = 1.0 / len(avail)
+            for split, detail in [('ID', id_detail), ('OOD', ood_detail)]:
+                alpha = detail.get('alpha')
+                if alpha is not None:
+                    alpha_mean = alpha.mean(axis=0)   # [M] 샘플 평균
+                    alpha_std  = alpha.std(axis=0)    # [M] 샘플 표준편차
+                    deviation  = float(np.abs(alpha_mean - uniform).max())
+                    flag       = "✓ adaptive" if deviation > 0.05 else "⚠️  near-uniform"
+                    parts = "  ".join(
+                        f"α_{m}={alpha_mean[k]:.3f}±{alpha_std[k]:.3f}"
+                        for k, m in enumerate(avail)
+                    )
+                    logging.info(f"    {split:3s}  {parts}  max_dev={deviation:.3f}  {flag}")
+                    if use_wandb:
+                        ood_methods_metrics[f"{prefix}/{split}_alpha_max_dev"] = deviation
+                        for k, m in enumerate(avail):
+                            ood_methods_metrics.update({
+                                f"{prefix}/{split}_alpha_{m}_mean": float(alpha_mean[k]),
+                                f"{prefix}/{split}_alpha_{m}_std":  float(alpha_std[k]),
+                            })
+
+            # ID vs OOD α_m 차이 — 같으면 adaptive weighting이 ID/OOD 구분에 기여 안 함
+            id_alpha  = id_detail.get('alpha')
+            ood_alpha = ood_detail.get('alpha')
+            if id_alpha is not None and ood_alpha is not None:
+                for k, m in enumerate(avail):
+                    diff = float(id_alpha[:, k].mean() - ood_alpha[:, k].mean())
+                    logging.info(
+                        f"    α_{m} ID-OOD diff={diff:+.4f}  "
+                        f"{'✓ differs' if abs(diff) > 0.02 else '⚠️  similar'}"
+                    )
+                    if use_wandb:
+                        ood_methods_metrics[f"{prefix}/alpha_{m}_ID_OOD_diff"] = diff
+
+        logging.info(SEP)
+
+        # ── 6. wandb Histogram 로깅 ────────────────────────────────────
+        if use_wandb:
+            try:
+                import wandb
+                hist_logs = {}
+                for split, detail in [('ID', id_detail), ('OOD', ood_detail)]:
+                    for term in ['A', 'B', 'C', 'scores']:
+                        hist_logs[f"{prefix}/{split}_{term}_hist"] = \
+                            wandb.Histogram(detail[term])
+                    # P_x, D_KL raw 히스토그램
+                    if detail.get('P_x') is not None:
+                        hist_logs[f"{prefix}/{split}_P_x_hist"] = \
+                            wandb.Histogram(detail['P_x'])
+                    if detail.get('D_KL') is not None:
+                        hist_logs[f"{prefix}/{split}_D_KL_hist"] = \
+                            wandb.Histogram(detail['D_KL'])
+                    d_tilde = detail.get('d_tilde')
+                    if d_tilde is not None:
+                        for k, m in enumerate(avail):
+                            hist_logs[f"{prefix}/{split}_dtilde_{m}_hist"] = \
+                                wandb.Histogram(d_tilde[:, k])
+                    alpha = detail.get('alpha')
+                    if alpha is not None:
+                        for k, m in enumerate(avail):
+                            hist_logs[f"{prefix}/{split}_alpha_{m}_hist"] = \
+                                wandb.Histogram(alpha[:, k])
+                wandb.log(hist_logs)
+            except Exception as e:
+                logging.debug(f"[MoAS] wandb histogram logging failed: {e}")
+
+        # ── 7. CSV 저장 (sample-level, ID+OOD 합산) ───────────────────
+        # 나중에 notebook에서 시각화 가능하도록 per-sample rows로 저장
+        # 경로: diag_log_path 기준 또는 ./ood_analysis/ 기본값
+        import csv
+        increment = self.args.get('increment', 'unknown')
+        prefix    = self.args.get('prefix', 'exp')
+        diag_path = self.args.get('diag_log_path', '')
+        if diag_path:
+            csv_dir = os.path.join(os.path.dirname(diag_path), 'ood_analysis',
+                                   f"{prefix}_inc{increment}")
+        else:
+            csv_dir = os.path.join('.', 'ood_analysis', f"{prefix}_inc{increment}")
+        os.makedirs(csv_dir, exist_ok=True)
+        csv_path = os.path.join(csv_dir, f"task{task}_{method_name}.csv")
+
+        try:
+            import torch
+            d_tilde_cols = [f"d_tilde_{m}" for m in avail]
+            alpha_cols   = [f"alpha_{m}"   for m in avail]
+            fieldnames   = (
+                ['task_id', 'is_ood', 'true_label', 'pred_label',
+                 'A', 'B', 'C', 'score', 'P_x', 'D_KL']
+                + d_tilde_cols + alpha_cols
+            )
+
+            # pred_label: argmax of main logits
+            def _to_labels(logits_tensor):
+                if logits_tensor is None:
+                    return None
+                t = logits_tensor
+                if not isinstance(t, torch.Tensor):
+                    t = torch.tensor(t)
+                return t.argmax(dim=1).cpu().numpy()
+
+            id_pred  = _to_labels(id_logits)
+            ood_pred = _to_labels(ood_logits)
+
+            def _to_numpy(x):
+                if x is None:
+                    return None
+                if isinstance(x, torch.Tensor):
+                    return x.cpu().numpy()
+                import numpy as np
+                return np.asarray(x)
+
+            id_true  = _to_numpy(id_labels)
+            ood_true = _to_numpy(ood_labels)
+
+            with open(csv_path, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for is_ood_flag, detail, true_arr, pred_arr in [
+                    (0, id_detail,  id_true,  id_pred),
+                    (1, ood_detail, ood_true, ood_pred),
+                ]:
+                    n = len(detail['scores'])
+                    d_tilde_arr = detail.get('d_tilde')
+                    alpha_arr   = detail.get('alpha')
+                    p_x_arr     = detail.get('P_x',  detail['B'])
+                    dkl_arr     = detail.get('D_KL', detail['C'])
+                    for i in range(n):
+                        row = {
+                            'task_id':    task,
+                            'is_ood':     is_ood_flag,
+                            'true_label': int(true_arr[i]) if true_arr is not None else -1,
+                            'pred_label': int(pred_arr[i]) if pred_arr is not None else -1,
+                            'A':          float(detail['A'][i]),
+                            'B':          float(detail['B'][i]),
+                            'C':          float(detail['C'][i]),
+                            'score':      float(detail['scores'][i]),
+                            'P_x':        float(p_x_arr[i]),
+                            'D_KL':       float(dkl_arr[i]),
+                        }
+                        for k, col in enumerate(d_tilde_cols):
+                            row[col] = float(d_tilde_arr[i, k]) if d_tilde_arr is not None else float('nan')
+                        for k, col in enumerate(alpha_cols):
+                            row[col] = float(alpha_arr[i, k]) if alpha_arr is not None else float('nan')
+                        writer.writerow(row)
+            logging.info(f"[MoAS] Component CSV saved → {csv_path}")
+        except Exception as e:
+            logging.warning(f"[MoAS] Failed to save component CSV: {e}")
+
+        # ── 8. 로컬 JSON 저장 (기존 유지, P_x/D_KL 추가) ─────────────
+        if diag_path:
+            save_dir  = os.path.dirname(diag_path)
+            save_path = os.path.join(
+                save_dir,
+                f"moas_components_{method_name}_task{task}.json"
+            )
+            comp_data = {}
+            for split, detail in [('ID', id_detail), ('OOD', ood_detail)]:
+                comp_data[split] = {
+                    term: detail[term].tolist()
+                    for term in ['A', 'B', 'C', 'scores']
+                }
+                for key in ['P_x', 'D_KL']:
+                    if detail.get(key) is not None:
+                        comp_data[split][key] = detail[key].tolist()
+                if detail.get('d_tilde') is not None:
+                    comp_data[split]['d_tilde'] = detail['d_tilde'].tolist()
+                if detail.get('alpha') is not None:
+                    comp_data[split]['alpha'] = detail['alpha'].tolist()
+                comp_data[split]['avail'] = avail
+            try:
+                with open(save_path, 'w') as f:
+                    json.dump(comp_data, f)
+                logging.info(f"[MoAS] Component JSON saved → {save_path}")
+            except Exception as e:
+                logging.warning(f"[MoAS] Failed to save component JSON: {e}")
+
+    def _build_knn_dist_ref_from_memory(self, data_manager, include_main: bool = False):
+        """
+        Replay-buffer로부터 per-modality kNN dist_ref (class-mean vectors + dist_stats) 구축.
 
         계산 내용:
-          proto[m][c]    = mean(z_m | label == c)  over buffer samples
-          mu_dist[m]     = mean(min_c ||z_m - proto[m][c]||)  over buffer samples
-          sigma_dist[m]  = std(...)  over buffer samples
+          class_means[m][c] = mean(z_m | label == c)   버퍼 샘플의 클래스별 평균 logit
+          μ_dist[m]         = mean_x(min_c ||z_m - μ_c||)   버퍼 샘플의 최근접 평균 거리
+          σ_dist[m]         = std(...)
 
-        결과를 fusion.set_prototypes()로 주입.
+        결과를 fusion.set_class_means()로 주입.
         """
         import numpy as _np
 
@@ -1074,19 +1391,19 @@ class MMEABaseLearner(BaseLearner):
         if fusion is None:
             fusion = getattr(self._network, 'fusion_network', None)
         if fusion is None or not hasattr(fusion, 'auxiliary_heads'):
-            logging.info("[ProtoStats] No auxiliary heads — skipping prototype computation")
+            logging.info("[DistStats] No auxiliary heads — skipping kNN dist_ref build")
             return
-        if not hasattr(fusion, 'set_prototypes'):
-            logging.info("[ProtoStats] fusion has no set_prototypes — skipping")
+        if not hasattr(fusion, 'set_class_means'):
+            logging.info("[DistStats] fusion has no set_class_means — skipping")
             return
 
         memory = self._get_memory()
         if memory is None:
-            logging.info("[ProtoStats] No memory buffer — skipping prototype computation")
+            logging.info("[DistStats] No memory buffer — skipping kNN dist_ref build")
             return
 
         data_mem, targets_mem = memory
-        logging.info(f"[ProtoStats] Computing class prototypes from buffer ({len(data_mem)} samples)...")
+        logging.info(f"[DistStats] Building kNN dist_ref from buffer ({len(data_mem)} samples)...")
 
         mem_dataset = data_manager.get_dataset(
             [], source="train", mode="test",
@@ -1112,7 +1429,7 @@ class MMEABaseLearner(BaseLearner):
 
         with torch.no_grad():
             for i, (_, inputs, labels) in enumerate(
-                tqdm(mem_loader, desc="ProtoStats(memory) forward", leave=False)
+                tqdm(mem_loader, desc="DistStats(memory) forward", leave=False)
             ):
                 if self.args.get("debug_mode") and i >= 10:
                     break
@@ -1144,33 +1461,32 @@ class MMEABaseLearner(BaseLearner):
                             logit_accum["main"][lbl] = []
                         logit_accum["main"][lbl].append(z_main_np[j])
 
-        # Build prototypes and distance statistics
-        prototypes = {}
-        dist_stats = {}
+        # Build class-mean logit vectors and kNN dist_stats
+        class_means = {}
+        dist_stats  = {}
         for m in accum_keys:
             if not logit_accum[m]:
                 continue
-            # proto[m][c] = mean logit vector
-            proto_m = {}
-            for c, vecs in logit_accum[m].items():
-                proto_m[c] = _np.mean(vecs, axis=0)  # [C]
-            prototypes[m] = proto_m
+            class_means_m = {
+                c: _np.mean(vecs, axis=0)          # μ_c = mean logit vector  [C]
+                for c, vecs in logit_accum[m].items()
+            }
+            class_means[m] = class_means_m
 
-            # Nearest-prototype distance over all buffer samples
-            all_protos = _np.array(list(proto_m.values()))  # [num_classes, C]
+            # d_m(x) = min_c ||z_m(x) - μ_c||  for each buffer sample x
+            class_mean_mat = _np.array(list(class_means_m.values()))  # [num_classes, C]
             dists = []
-            for c, vecs in logit_accum[m].items():
+            for vecs in logit_accum[m].values():
                 for z in vecs:
-                    diff = z[None, :] - all_protos  # [num_classes, C]
-                    raw_dist = _np.linalg.norm(diff, axis=1).min()
-                    dists.append(raw_dist)
+                    diff = z[None, :] - class_mean_mat          # [num_classes, C]
+                    dists.append(_np.linalg.norm(diff, axis=1).min())
 
             dists = _np.array(dists)
-            mu_d = float(dists.mean())
+            mu_d  = float(dists.mean())
             sig_d = float(dists.std()) + 1e-8
             dist_stats[m] = (mu_d, sig_d)
             logging.info(
-                f"[ProtoStats] {m}: {len(proto_m)} classes, "
+                f"[DistStats] {m}: {len(class_means_m)} classes, "
                 f"μ_dist={mu_d:.4f}, σ_dist={sig_d:.4f}  (N={len(dists)})"
             )
 
@@ -1178,9 +1494,9 @@ class MMEABaseLearner(BaseLearner):
         for mod_name in self._modality:
             setattr(fusion, f'_energy_logged_{mod_name}', False)
 
-        if prototypes:
-            fusion.set_prototypes(prototypes, dist_stats)
-            logging.info("[ProtoStats] ✅ Class prototypes injected into fusion module")
+        if class_means:
+            fusion.set_class_means(class_means, dist_stats)
+            logging.info("[DistStats] ✅ kNN dist_stats injected into fusion module")
 
             # Inject raw logit arrays for distance-metric OOD detectors
             if hasattr(fusion, 'set_raw_logit_arrays'):
@@ -1191,9 +1507,9 @@ class MMEABaseLearner(BaseLearner):
                     if cls_dict
                 }
                 fusion.set_raw_logit_arrays(raw_logit_arrays)
-                logging.info("[ProtoStats] ✅ Raw logit arrays injected into fusion module")
+                logging.info("[DistStats] ✅ kNN dist_ref (raw logit arrays) injected into fusion module")
         else:
-            logging.warning("[ProtoStats] ⚠️  No auxiliary logits found — prototypes not set")
+            logging.warning("[DistStats] ⚠️  No auxiliary logits found — kNN dist_ref not built")
 
 
 
@@ -1224,18 +1540,18 @@ class MMEABaseLearner(BaseLearner):
         else:
             logging.warning("⚠️  No class means found in checkpoint - NME evaluation will be unavailable")
 
-        # ── Prototype Distance stats 복원 ─────────────────────────────────
-        # 새 checkpoint 로드 시 항상 기존 prototypes 초기화 (task 간 stale prototype 방지)
+        # ── kNN dist_ref (class means + dist_stats) 복원 ──────────────────
+        # 새 checkpoint 로드 시 항상 초기화하여 task 간 stale dist_ref 방지
         fusion = getattr(self._network, 'fusion', None) or getattr(self._network, 'fusion_network', None)
-        if fusion is not None and hasattr(fusion, '_prototypes'):
-            fusion._prototypes = {}
-            fusion._dist_stats = {}
+        if fusion is not None and hasattr(fusion, '_class_means'):
+            fusion._class_means = {}
+            fusion._dist_stats  = {}
             if hasattr(fusion, '_raw_logit_arrays'):
                 fusion._raw_logit_arrays = {}
-        if 'prototypes' in checkpoint and 'dist_stats' in checkpoint:
-            if fusion is not None and hasattr(fusion, 'set_prototypes'):
-                fusion.set_prototypes(checkpoint['prototypes'], checkpoint['dist_stats'])
-                logging.info(f"[MemoryLoad] ✅ Prototypes restored from checkpoint: {list(checkpoint['prototypes'].keys())}")
+        if 'class_means' in checkpoint and 'dist_stats' in checkpoint:
+            if fusion is not None and hasattr(fusion, 'set_class_means'):
+                fusion.set_class_means(checkpoint['class_means'], checkpoint['dist_stats'])
+                logging.info(f"[MemoryLoad] ✅ kNN dist_ref (class means) restored from checkpoint: {list(checkpoint['class_means'].keys())}")
         if 'raw_logit_arrays' in checkpoint:
             if fusion is not None and hasattr(fusion, 'set_raw_logit_arrays'):
                 fusion.set_raw_logit_arrays(checkpoint['raw_logit_arrays'])
@@ -1296,22 +1612,22 @@ class MMEABaseLearner(BaseLearner):
             logging.error("❌ test_loader is not set properly!")
             raise AttributeError("test_loader was not set up correctly")
 
-        # ── Prototype 기반 OOD methods: checkpoint에 있으면 복원된 것 사용, 없으면 재계산 ──
+        # ── MoAS (kNN dist_ref 기반) OOD methods: checkpoint에 있으면 복원된 것 사용, 없으면 재계산 ──
         _PROTO_REQUIRED = {
             "MoAS", "MoAS_AdaptiveFusion", "MoAS_DeviationPenalty", "MoAS_KLPenalty",
         }
         if _PROTO_REQUIRED & set(self.args.get("ood_methods", [])):
             fusion = getattr(self._network, 'fusion', None) or \
                      getattr(self._network, 'fusion_network', None)
-            proto_loaded = (
+            dist_ref_loaded = (
                 fusion is not None
-                and getattr(fusion, '_prototypes', {})       # non-empty prototypes
-                and getattr(fusion, '_raw_logit_arrays', {}) # AND raw logit arrays needed for kNN
+                and getattr(fusion, '_class_means', {})      # non-empty class-mean dist_ref
+                and getattr(fusion, '_raw_logit_arrays', {}) # AND raw logit arrays for kNN
             )
-            if proto_loaded:
-                logging.info("[ProtoStats] ✅ Prototypes + raw logit arrays loaded from checkpoint — skipping recompute")
+            if dist_ref_loaded:
+                logging.info("[DistStats] ✅ kNN dist_ref loaded from checkpoint — skipping recompute")
             else:
-                logging.info("[ProtoStats] Not in checkpoint — rebuilding full buffer for prototype computation")
+                logging.info("[DistStats] Not in checkpoint — rebuilding kNN dist_ref from buffer")
                 self._data_memory = []
                 self._targets_memory = []
                 if hasattr(self, '_modality_logits_memory'):
@@ -1321,7 +1637,7 @@ class MMEABaseLearner(BaseLearner):
                 self._known_classes = 0
                 self.build_rehearsal_memory(data_manager, self.samples_per_class)
                 self._known_classes = _saved_known
-                self._compute_class_prototypes_from_memory(
+                self._build_knn_dist_ref_from_memory(
                     data_manager, include_main=False
                 )
 

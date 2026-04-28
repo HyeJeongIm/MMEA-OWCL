@@ -121,16 +121,13 @@ class MANDFusion(nn.Module):
         self.first_forward_per_task: dict = {}
         self.epoch_logged: set = set()
 
-        # Prototype Distance Adaptive Weighting — injected by mmeabase
-        # via _compute_class_prototypes_from_memory → set_prototypes()
-        # Used at inference when OOD method == 'PrototypeAdaptive'
-        self._prototypes: dict = {}   # {m: {class_idx: np.ndarray [C]}}
-        self._dist_stats: dict = {}   # {m: (mu_dist: float, sigma_dist: float)}
+        # kNN dist_ref — injected by mmeabase via _build_knn_dist_ref_from_memory → set_class_means()
+        # _class_means[m][c]: mean logit vector of class c, used to compute d_m = min_c ||z - μ_c||
+        self._class_means: dict = {}   # {m: {class_idx: np.ndarray [C]}}
+        self._dist_stats: dict = {}   # {m: (μ_dist: float, σ_dist: float)}
 
-        # Raw buffer logit arrays — injected by mmeabase
-        # via _compute_class_prototypes_from_memory → set_raw_logit_arrays()
-        # Used by distance-metric OOD detectors (kNN, DiagMahal, Softmax, PooledMahal, Cosine)
-        # to self-compute their own metric-specific dist_stats at init time.
+        # Raw buffer logit arrays — injected via _build_knn_dist_ref_from_memory → set_raw_logit_arrays()
+        # Used by MoAS detectors to self-compute metric-specific dist_stats at init time.
         self._raw_logit_arrays: dict = {}  # {m: {class_idx: list[np.ndarray [C]]}}
 
 
@@ -147,7 +144,7 @@ class MANDFusion(nn.Module):
         """
         Alias for modality_heads.
         Required by mmeabase.py:
-            hasattr(fusion, 'auxiliary_heads')   → triggers prototype computation
+            hasattr(fusion, 'auxiliary_heads')   → triggers kNN dist_ref build
         """
         return self.modality_heads
 
@@ -173,20 +170,21 @@ class MANDFusion(nn.Module):
             f"[MANDFusion] Modality heads updated: {old_num_classes} → {nb_classes} classes"
         )
 
-    def set_prototypes(self, prototypes: dict, dist_stats: dict):
+    def set_class_means(self, class_means: dict, dist_stats: dict):
         """
-        Inject per-modality class prototypes and distance statistics from the replay buffer.
-        Used at inference time by PrototypeAdaptiveDetector.
+        Inject per-modality class-mean logit vectors and kNN distance statistics.
+        Called by _build_knn_dist_ref_from_memory after computing the replay buffer stats.
 
         Args:
-            prototypes:  {modality: {class_idx (int): np.ndarray [C]}}
-            dist_stats:  {modality: (mu_dist: float, sigma_dist: float)}
+            class_means: {modality: {class_idx (int): np.ndarray [C]}}
+                         μ_c = mean logit vector of class c, used as reference for d_m
+            dist_stats:  {modality: (μ_dist: float, σ_dist: float)}
         """
-        self._prototypes = prototypes
-        self._dist_stats = dist_stats
-        logging.info("[MANDFusion] Prototype distance stats injected:")
+        self._class_means = class_means
+        self._dist_stats  = dist_stats
+        logging.info("[MANDFusion] kNN dist_stats injected:")
         for m, (mu, sigma) in dist_stats.items():
-            n_cls = len(prototypes.get(m, {}))
+            n_cls = len(class_means.get(m, {}))
             logging.info(f"  {m}: μ_dist={mu:.4f}, σ_dist={sigma:.4f}, classes={n_cls}")
 
     def set_raw_logit_arrays(self, raw_logit_arrays: dict):
